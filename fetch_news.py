@@ -417,6 +417,19 @@ def save_arxiv_papers() -> int:
         encoding="utf-8",
     )
     print(f"  ✅ 已保存 {len(papers)} 篇论文到 papers_today.json")
+
+    # 推送到云端 API
+    cloud_url = "https://web-production-6e883.up.railway.app/update_papers"
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(cloud_url, json=payload)
+            if resp.status_code == 200:
+                print(f"  ✅ 已推送到云端 API（{resp.json().get('count', len(papers))} 篇）")
+            else:
+                print(f"  ⚠ 云端 API 返回 {resp.status_code}: {resp.text[:100]}")
+    except Exception as e:
+        print(f"  ⚠ 云端推送失败（不影响本地）: {e}")
+
     return len(papers)
 
 

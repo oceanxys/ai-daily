@@ -88,6 +88,31 @@ def update_highlights():
     })
 
 
+# ── POST /update_papers ──────────────────────────────────────
+@app.route("/update_papers", methods=["POST"])
+def update_papers():
+    """接收论文数据并保存到 papers_today.json。"""
+    if not request.is_json:
+        return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400
+
+    body = request.get_json(silent=True)
+    if body is None:
+        return jsonify({"success": False, "error": "无法解析 JSON"}), 400
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    PAPERS_PATH.write_text(
+        json.dumps(body, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    count = body.get("count", len(body.get("papers", [])))
+    return jsonify({
+        "success": True,
+        "count":   count,
+        "message": f"已写入 {count} 篇论文",
+    })
+
+
 # ── 健康检查 ──────────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
