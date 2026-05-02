@@ -6,28 +6,96 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import psycopg2
+import psycopg2.extras
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-DATA_DIR       = Path.home() / "Projects" / "ai-daily" / "data"
-PAPERS_PATH    = DATA_DIR / "papers_today.json"
+DATA_DIR        = Path.home() / "Projects" / "ai-daily" / "data"
+PAPERS_PATH     = DATA_DIR / "papers_today.json"
 HIGHLIGHTS_PATH = DATA_DIR / "highlights.json"
+DATABASE_URL    = os.environ.get("DATABASE_URL")
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
+
+
+def init_db():
+    if not DATABASE_URL:
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS papers (
+                        id          SERIAL PRIMARY KEY,
+                        title       TEXT,
+                        authors     TEXT,
+                        abstract    TEXT,
+                        arxiv_url   TEXT,
+                        published   TEXT,
+                        categories  TEXT,
+                        created_at  TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS highlights (
+                        id          SERIAL PRIMARY KEY,
+                        title       TEXT,
+                        summary     TEXT,
+                        reason      TEXT,
+                        arxiv_url   TEXT,
+                        created_at  TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+            conn.commit()
+        print("✅ 数据库表初始化完成")
+    except Exception as e:
+        print(f"⚠ 数据库初始化失败: {e}")
+
+
+init_db()
 
 
 # ── GET /papers ──────────────────────────────────────────────
 @app.route("/papers", methods=["GET"])
 def get_papers():
-    """返回今日抓取的论文列表。文件不存在时返回空列表。"""
+    if DATABASE_URL:
+        try:
+            with get_conn() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT title, authors, abstract, arxiv_url, published, categories
+                        FROM papers
+                        WHERE created_at::date = CURRENT_DATE
+                        ORDER BY id
+                    """)
+                    rows = cur.fetchall()
+            papers = []
+            for r in rows:
+                papers.append({
+                    "title":      r["title"],
+                    "authors":    json.loads(r["authors"] or "[]"),
+                    "abstract":   r["abstract"],
+                    "arxiv_url":  r["arxiv_url"],
+                    "published":  r["published"],
+                    "categories": json.loads(r["categories"] or "[]"),
+                })
+            return jsonify(papers)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    # fallback: JSON 文件
     if not PAPERS_PATH.exists():
         return jsonify([])
     try:
         data = json.loads(PAPERS_PATH.read_text(encoding="utf-8"))
-        # 兼容列表或 {"papers": [...]} 两种格式
         if isinstance(data, list):
             return jsonify(data)
         return jsonify(data.get("papers", []))
@@ -38,23 +106,6 @@ def get_papers():
 # ── POST /update_highlights ───────────────────────────────────
 @app.route("/update_highlights", methods=["POST"])
 def update_highlights():
-    """
-    接收扣子 Bot 返回的精选论文总结并写入 highlights.json。
-
-    期望 JSON 格式（支持列表或对象）：
-    [
-      {
-        "title":      "论文标题",
-        "summary":    "一句话总结",
-        "reason":     "推荐理由",
-        "arxiv_link": "https://arxiv.org/abs/..."
-      }
-    ]
-    或
-    {
-      "highlights": [ ... ]
-    }
-    """
     if not request.is_json:
         return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400
 
@@ -62,7 +113,6 @@ def update_highlights():
     if body is None:
         return jsonify({"success": False, "error": "无法解析 JSON"}), 400
 
-    # 统一转为列表
     if isinstance(body, list):
         highlights = body
     elif isinstance(body, dict):
@@ -70,12 +120,31 @@ def update_highlights():
     else:
         return jsonify({"success": False, "error": "不支持的数据格式"}), 400
 
+    if DATABASE_URL:
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM highlights WHERE created_at::date = CURRENT_DATE")
+                    for h in highlights:
+                        cur.execute("""
+                            INSERT INTO highlights (title, summary, reason, arxiv_url)
+                            VALUES (%s, %s, %s, %s)
+                        """, (
+                            h.get("title", ""),
+                            h.get("summary", ""),
+                            h.get("reason", ""),
+                            h.get("arxiv_link", h.get("arxiv_url", "")),
+                        ))
+                conn.commit()
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # 同时写入 JSON 文件作为备份
     payload = {
         "highlights":  highlights,
         "updated_at":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "count":       len(highlights),
     }
-
     HIGHLIGHTS_PATH.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -91,7 +160,6 @@ def update_highlights():
 # ── POST /update_papers ──────────────────────────────────────
 @app.route("/update_papers", methods=["POST"])
 def update_papers():
-    """接收论文数据并保存到 papers_today.json。"""
     if not request.is_json:
         return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400
 
@@ -99,13 +167,37 @@ def update_papers():
     if body is None:
         return jsonify({"success": False, "error": "无法解析 JSON"}), 400
 
+    papers = body.get("papers", []) if isinstance(body, dict) else body
+
+    if DATABASE_URL:
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM papers WHERE created_at::date = CURRENT_DATE")
+                    for p in papers:
+                        cur.execute("""
+                            INSERT INTO papers (title, authors, abstract, arxiv_url, published, categories)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (
+                            p.get("title", ""),
+                            json.dumps(p.get("authors", []), ensure_ascii=False),
+                            p.get("abstract", ""),
+                            p.get("arxiv_url", ""),
+                            p.get("published", ""),
+                            json.dumps(p.get("categories", []), ensure_ascii=False),
+                        ))
+                conn.commit()
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # 同时写入 JSON 文件作为备份
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     PAPERS_PATH.write_text(
         json.dumps(body, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
-    count = body.get("count", len(body.get("papers", [])))
+    count = body.get("count", len(papers)) if isinstance(body, dict) else len(papers)
     return jsonify({
         "success": True,
         "count":   count,
@@ -116,6 +208,25 @@ def update_papers():
 # ── 健康检查 ──────────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
+    if DATABASE_URL:
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM papers WHERE created_at::date = CURRENT_DATE")
+                    paper_count = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM highlights WHERE created_at::date = CURRENT_DATE")
+                    highlight_count = cur.fetchone()[0]
+            return jsonify({
+                "status":          "ok",
+                "source":          "postgresql",
+                "paper_count":     paper_count,
+                "highlight_count": highlight_count,
+                "time":            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+        except Exception as e:
+            return jsonify({"status": "error", "error": str(e)}), 500
+
+    # fallback: 文件模式
     has_papers     = PAPERS_PATH.exists()
     has_highlights = HIGHLIGHTS_PATH.exists()
     highlight_count = 0
@@ -127,6 +238,7 @@ def health():
             pass
     return jsonify({
         "status":          "ok",
+        "source":          "file",
         "papers_file":     has_papers,
         "highlights_file": has_highlights,
         "highlight_count": highlight_count,
