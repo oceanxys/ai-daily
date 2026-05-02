@@ -66,6 +66,8 @@ init_db()
 # ── GET /papers ──────────────────────────────────────────────
 @app.route("/papers", methods=["GET"])
 def get_papers():
+    today = datetime.now().strftime("%Y-%m-%d")
+
     if DATABASE_URL:
         try:
             with get_conn() as conn:
@@ -87,18 +89,17 @@ def get_papers():
                     "published":  r["published"],
                     "categories": json.loads(r["categories"] or "[]"),
                 })
-            return jsonify(papers)
+            return jsonify({"papers": papers, "count": len(papers), "date": today})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
     # fallback: JSON 文件
     if not PAPERS_PATH.exists():
-        return jsonify([])
+        return jsonify({"papers": [], "count": 0, "date": today})
     try:
         data = json.loads(PAPERS_PATH.read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            return jsonify(data)
-        return jsonify(data.get("papers", []))
+        papers = data.get("papers", data) if isinstance(data, dict) else data
+        return jsonify({"papers": papers, "count": len(papers), "date": today})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
