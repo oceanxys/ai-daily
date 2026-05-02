@@ -2,6 +2,7 @@
 """AI Daily 本地 API 服务 - 端口 5001"""
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
