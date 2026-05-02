@@ -81,9 +81,10 @@ def get_papers():
                     rows = cur.fetchall()
             papers = []
             for r in rows:
+                authors_raw = json.loads(r["authors"] or "[]")
                 papers.append({
                     "title":      r["title"],
-                    "authors":    json.loads(r["authors"] or "[]"),
+                    "authors":    ", ".join(authors_raw) if isinstance(authors_raw, list) else authors_raw,
                     "abstract":   r["abstract"],
                     "arxiv_url":  r["arxiv_url"],
                     "published":  r["published"],
@@ -98,7 +99,11 @@ def get_papers():
         return jsonify({"papers": [], "count": 0, "date": today})
     try:
         data = json.loads(PAPERS_PATH.read_text(encoding="utf-8"))
-        papers = data.get("papers", data) if isinstance(data, dict) else data
+        raw_papers = data.get("papers", data) if isinstance(data, dict) else data
+        papers = []
+        for p in raw_papers:
+            authors = p.get("authors", "")
+            papers.append({**p, "authors": ", ".join(authors) if isinstance(authors, list) else authors})
         return jsonify({"papers": papers, "count": len(papers), "date": today})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
