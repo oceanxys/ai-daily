@@ -1584,14 +1584,19 @@ def fetch_trending() -> dict:
         except Exception as e:
             print(f"    ⚠ {name} 抓取失败: {e}")
 
+    sorted_posts = sorted(posts, key=lambda x: x["score"], reverse=True)[:40]
     posts_text = "\n".join(
-        f"- [{p['source']}] {p['title']} (热度:{p['score']})"
-        for p in sorted(posts, key=lambda x: x["score"], reverse=True)[:40]
+        f"- [ID:{i}] [{p['source']}] {p['title']} (热度:{p['score']}) URL:{p['url']}"
+        for i, p in enumerate(sorted_posts)
     )
+    # 建立 ID → URL 映射，供解析时回填真实链接
+    url_map = {str(i): p["url"] for i, p in enumerate(sorted_posts)}
+
     if not posts_text:
         posts_text = "（未能抓取，请基于 AI 圈近期热点补充）"
+        url_map = {}
 
-    prompt = f"""以下是今日 AI 社区热门帖子标题。请提取热门话题关键词，并整理代表性讨论。
+    prompt = f"""以下是今日 AI 社区热门帖子（每条含 ID 和 URL）。请提取热门话题关键词，并整理代表性讨论。
 
 {posts_text}
 
@@ -1602,13 +1607,19 @@ def fetch_trending() -> dict:
     {{"keyword": "关键词", "heat": "极热/热门/上升中", "summary": "话题简述（20字内）", "emoji": "emoji"}}
   ],
   "top_posts": [
-    {{"title": "中文标题", "original_title": "原标题", "score": 1234, "source": "来源", "url": "链接"}}
+    {{"title": "中文标题", "original_title": "原标题", "score": 1234, "source": "来源", "post_id": "0"}}
   ]
 }}
 
-keywords 8~12 个，top_posts 6~8 条，字符串不含双引号。"""
+keywords 8~12 个，top_posts 6~8 条，字符串不含双引号。
+post_id 填对应帖子的 ID 数字（字符串形式），不要填 URL。"""
 
     result = _claude_json(prompt)
+    if result and url_map:
+        for p in result.get("top_posts", []):
+            pid = str(p.get("post_id", ""))
+            p["url"] = url_map.get(pid, "https://www.reddit.com/r/artificial/")
+
     return result or {}
 
 
