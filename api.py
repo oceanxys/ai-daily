@@ -494,12 +494,15 @@ def health():
                     highlight_count = cur.fetchone()[0]
                     cur.execute("SELECT COUNT(*) FROM topic_history WHERE date = CURRENT_DATE::text")
                     topic_count = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM articles_cloud WHERE created_at::date = CURRENT_DATE")
+                    article_count = cur.fetchone()[0]
             return jsonify({
                 "status":          "ok",
                 "source":          "postgresql",
                 "paper_count":     paper_count,
                 "highlight_count": highlight_count,
                 "topic_count":     topic_count,
+                "article_count":   article_count,
                 "time":            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
         except Exception as e:
