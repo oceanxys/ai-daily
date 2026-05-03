@@ -1623,11 +1623,18 @@ post_id 填对应帖子的 ID 数字（字符串形式），不要填 URL。"""
     return result or {}
 
 
+CLOUD_BASE = "https://web-production-6e883.up.railway.app"
+
 TRENDING_CSS = """
+.tab-bar{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:1.5rem}
+.tab-btn{background:none;border:none;padding:.6rem 1.4rem;font-size:.88rem;font-weight:600;
+  color:var(--t3);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s}
+.tab-btn.active{color:var(--blue);border-bottom-color:var(--blue)}
+.tab-panel{display:none}.tab-panel.active{display:block}
 .kw-cloud{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:2rem}
 .kw-chip{display:inline-flex;align-items:center;gap:.4rem;
   padding:.35rem .85rem;border-radius:20px;font-size:.82rem;
-  background:var(--bg2);border:1px solid var(--border);cursor:default;transition:all .15s}
+  background:var(--bg2);border:1px solid var(--border);cursor:pointer;transition:all .15s}
 .kw-chip:hover{border-color:var(--blue);background:var(--bg3)}
 .kw-emoji{font-size:1rem}
 .kw-word{font-weight:600;color:var(--t1)}
@@ -1636,6 +1643,11 @@ TRENDING_CSS = """
 .heat-热门{background:rgba(240,136,62,.15);color:var(--orange)}
 .heat-上升中{background:rgba(63,185,80,.15);color:var(--green)}
 .kw-summary{font-size:.72rem;color:var(--t3);margin-top:.1rem}
+.trend-badge{font-size:.68rem;padding:.05rem .3rem;border-radius:8px;margin-left:.2rem;font-weight:600}
+.trend-NEW{background:rgba(63,185,80,.2);color:var(--green)}
+.trend-up{color:var(--green);font-weight:700}
+.trend-down{color:var(--red);font-weight:700}
+.trend-stable{color:var(--t3)}
 .post-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;
   padding:1rem;display:flex;flex-direction:column;gap:.5rem;transition:all .15s}
 .post-card:hover{border-color:var(--blue);background:var(--bg3)}
@@ -1644,62 +1656,276 @@ TRENDING_CSS = """
 .post-score{color:var(--orange)}
 .post-link{color:var(--blue);text-decoration:none;font-size:.78rem;margin-top:.2rem}
 .post-link:hover{text-decoration:underline}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9000;
+  align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal-box{background:var(--bg1);border:1px solid var(--border);border-radius:16px;
+  max-width:600px;width:90vw;max-height:85vh;overflow-y:auto;padding:1.5rem;position:relative}
+.modal-close{position:absolute;top:1rem;right:1rem;background:none;border:none;
+  font-size:1.3rem;cursor:pointer;color:var(--t3);line-height:1}
+.modal-kw{font-size:1.2rem;font-weight:700;color:var(--t1);margin-bottom:.4rem}
+.modal-brief{font-size:.88rem;color:var(--t2);margin-bottom:1rem;
+  padding:.5rem .8rem;background:var(--bg2);border-radius:8px}
+.modal-section-title{font-size:.78rem;font-weight:700;color:var(--t3);
+  text-transform:uppercase;letter-spacing:.05em;margin:.9rem 0 .35rem}
+.modal-bg{font-size:.84rem;color:var(--t2);line-height:1.6}
+.modal-points{padding-left:1.2rem;margin:0}
+.modal-points li{font-size:.84rem;color:var(--t2);margin-bottom:.25rem}
+.modal-sources a{font-size:.8rem;color:var(--blue);text-decoration:none;display:block;margin-bottom:.2rem}
+.modal-sources a:hover{text-decoration:underline}
+.history-chart{width:100%;height:80px;margin-top:.5rem}
+.loading-spinner{text-align:center;padding:2rem;color:var(--t3);font-size:.88rem}
 """
 
 
-def generate_trending_html(data: dict) -> None:
-    now = datetime.now()
+def generate_topic_summaries_with_claude(keywords: list, top_posts: list) -> list:
+    if not keywords:
+        return []
+    kw_names = [k.get("keyword", "") for k in keywords]
+    posts_text = "\n".join(
+        f"- {p.get('title', '')} ({p.get('source', '')})"
+        for p in top_posts[:10]
+    )
+    prompt = f"""以下是今日 AI 热词列表，以及相关热门讨论帖子。请为每个关键词生成简报。
 
+热词列表：{', '.join(kw_names)}
+
+相关帖子：
+{posts_text}
+
+严格按以下 JSON 格式输出，不加任何其他文字：
+
+{{
+  "summaries": [
+    {{
+      "keyword": "关键词（与输入完全一致）",
+      "brief": "一句话描述这个话题（30字内）",
+      "background": "背景介绍（100字内）",
+      "key_points": ["要点1", "要点2", "要点3"],
+      "sources": ["来源描述1", "来源描述2"]
+    }}
+  ]
+}}
+
+为所有 {len(kw_names)} 个关键词各生成一条，字符串内容不含双引号。"""
+
+    result = _claude_json(prompt, max_tokens=4000)
+    return result.get("summaries", []) if result else []
+
+
+def push_topics_to_cloud(keywords: list, summaries: list) -> None:
+    today = datetime.now().strftime("%Y-%m-%d")
+    topics_payload = [
+        {
+            "keyword": k.get("keyword", ""),
+            "heat":    k.get("heat", "热门"),
+            "summary": k.get("summary", ""),
+            "date":    today,
+            "count":   1,
+        }
+        for k in keywords
+    ]
+    payload = {"topics": topics_payload, "summaries": summaries}
+    try:
+        with httpx.Client(timeout=15) as c:
+            r = c.post(
+                f"{CLOUD_BASE}/update_topics",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            if r.status_code == 200:
+                d = r.json()
+                print(f"  ✅ 已推送 {d.get('topics_count', 0)} 个热词到云端")
+            else:
+                print(f"  ⚠ 热词推送失败: HTTP {r.status_code}")
+    except Exception as e:
+        print(f"  ⚠ 热词推送到云端失败: {e}")
+
+
+def generate_trending_html(data: dict, topic_summaries: list = None) -> None:
+    now = datetime.now()
     keywords  = data.get("keywords", [])
     top_posts = data.get("top_posts", [])
 
+    summaries_map: dict = {}
+    if topic_summaries:
+        for s in topic_summaries:
+            summaries_map[s.get("keyword", "")] = s
+
     kw_html = ""
     for kw in keywords:
-        heat = kw.get("heat", "热门")
-        kw_html += f"""<div class="kw-chip">
-  <span class="kw-emoji">{kw.get('emoji','🔥')}</span>
-  <div>
-    <span class="kw-word">{kw.get('keyword','')}</span>
-    <span class="kw-heat heat-{heat}">{heat}</span>
-    <div class="kw-summary">{kw.get('summary','')}</div>
-  </div>
-</div>"""
+        heat    = kw.get("heat", "热门")
+        keyword = kw.get("keyword", "")
+        safe_kw = keyword.replace("&", "&amp;").replace('"', "&quot;")
+        kw_html += (
+            f'<div class="kw-chip" data-kw="{safe_kw}" onclick="openModal(this.dataset.kw)">'
+            f'<span class="kw-emoji">{kw.get("emoji","🔥")}</span>'
+            f'<div>'
+            f'<span class="kw-word">{keyword}</span>'
+            f'<span class="kw-heat heat-{heat}">{heat}</span>'
+            f'<div class="kw-summary">{kw.get("summary","")}</div>'
+            f'</div></div>'
+        )
 
     post_html = ""
     for p in top_posts:
-        post_html += f"""<div class="post-card">
-  <div class="post-title">{p.get('title','')}</div>
-  <div class="post-meta">
-    <span>{p.get('source','')}</span>
-    <span class="post-score">▲ {p.get('score',0)}</span>
-  </div>
-  <a class="post-link" href="{p.get('url','#')}" target="_blank" rel="noopener">查看原帖 →</a>
-</div>"""
+        post_html += (
+            f'<div class="post-card">'
+            f'<div class="post-title">{p.get("title","")}</div>'
+            f'<div class="post-meta">'
+            f'<span>{p.get("source","")}</span>'
+            f'<span class="post-score">▲ {p.get("score",0)}</span>'
+            f'</div>'
+            f'<a class="post-link" href="{p.get("url","#")}" target="_blank" rel="noopener">查看原帖 →</a>'
+            f'</div>'
+        )
 
-    body = f"""<div class="stats">
-  <div class="pulse"></div>
-  <span>今日 AI 热词 <strong>{len(keywords)}</strong> 个</span>
-  <span class="dot-sep">·</span>
-  <span>热门帖子 <strong>{len(top_posts)}</strong> 条</span>
-  <span class="dot-sep">·</span>
-  <span>更新于 {now.strftime('%H:%M')}</span>
-</div>
-<section class="section">
-  <div class="section-hdr" style="--cat-color:#ff7b72">
-    <span class="section-icon">🔥</span>
-    <h2 class="section-title">今日热词云</h2>
-    <span class="section-count">{len(keywords)}</span>
-  </div>
-  <div class="kw-cloud">{''.join(kw_html) if kw_html else '<div class="no-data">暂无热词数据</div>'}</div>
-</section>
-<section class="section">
-  <div class="section-hdr" style="--cat-color:#f0883e">
-    <span class="section-icon">💬</span>
-    <h2 class="section-title">热门帖子</h2>
-    <span class="section-count">{len(top_posts)}</span>
-  </div>
-  <div class="grid">{''.join(post_html) if post_html else '<div class="no-data">暂无帖子数据</div>'}</div>
-</section>"""
+    summaries_js = json.dumps(summaries_map, ensure_ascii=False)
+    kw_cloud_html  = kw_html  if kw_html  else '<div class="no-data">暂无热词数据</div>'
+    post_grid_html = post_html if post_html else '<div class="no-data">暂无帖子数据</div>'
+
+    body = (
+        '<div id="modal-overlay" class="modal-overlay" onclick="if(event.target===this)closeModal()">'
+        '<div class="modal-box">'
+        '<button class="modal-close" onclick="closeModal()">✕</button>'
+        '<div id="modal-kw" class="modal-kw"></div>'
+        '<div id="modal-brief" class="modal-brief"></div>'
+        '<div class="modal-section-title">背景</div>'
+        '<div id="modal-bg" class="modal-bg"></div>'
+        '<div class="modal-section-title">关键要点</div>'
+        '<ul id="modal-points" class="modal-points"></ul>'
+        '<div class="modal-section-title">相关来源</div>'
+        '<div id="modal-sources" class="modal-sources"></div>'
+        '<div id="modal-hist-title" class="modal-section-title" style="display:none">历史趋势</div>'
+        '<canvas id="modal-chart" class="history-chart" style="display:none"></canvas>'
+        '</div></div>'
+        f'<div class="stats"><div class="pulse"></div>'
+        f'<span>今日 AI 热词 <strong>{len(keywords)}</strong> 个</span>'
+        f'<span class="dot-sep">·</span>'
+        f'<span>热门帖子 <strong>{len(top_posts)}</strong> 条</span>'
+        f'<span class="dot-sep">·</span>'
+        f'<span>更新于 {now.strftime("%H:%M")}</span></div>'
+        '<div class="tab-bar">'
+        '<button class="tab-btn active" onclick="switchTab(\'today\',this)">📅 今日</button>'
+        '<button class="tab-btn" onclick="switchTab(\'week\',this)">📆 本周</button>'
+        '<button class="tab-btn" onclick="switchTab(\'month\',this)">🗓 本月</button>'
+        '</div>'
+        '<div id="tab-today" class="tab-panel active">'
+        f'<section class="section"><div class="section-hdr" style="--cat-color:#ff7b72">'
+        f'<span class="section-icon">🔥</span><h2 class="section-title">今日热词云</h2>'
+        f'<span class="section-count">{len(keywords)}</span></div>'
+        f'<div class="kw-cloud">{kw_cloud_html}</div></section>'
+        f'<section class="section"><div class="section-hdr" style="--cat-color:#f0883e">'
+        f'<span class="section-icon">💬</span><h2 class="section-title">热门帖子</h2>'
+        f'<span class="section-count">{len(top_posts)}</span></div>'
+        f'<div class="grid">{post_grid_html}</div></section>'
+        '</div>'
+        '<div id="tab-week" class="tab-panel">'
+        '<div id="week-content"><div class="loading-spinner">加载中...</div></div></div>'
+        '<div id="tab-month" class="tab-panel">'
+        '<div id="month-content"><div class="loading-spinner">加载中...</div></div></div>'
+        f'<script>\nconst SUMMARIES={summaries_js};\n'
+        f'const CLOUD_API="{CLOUD_BASE}";\n'
+        'const LOADED={};\n'
+        'function switchTab(name,btn){\n'
+        '  document.querySelectorAll(".tab-btn").forEach(function(b){b.classList.remove("active");});\n'
+        '  document.querySelectorAll(".tab-panel").forEach(function(p){p.classList.remove("active");});\n'
+        '  btn.classList.add("active");\n'
+        '  document.getElementById("tab-"+name).classList.add("active");\n'
+        '  if((name==="week"||name==="month")&&!LOADED[name]){\n'
+        '    LOADED[name]=true;\n'
+        '    loadTopics(name);\n'
+        '  }\n'
+        '}\n'
+        'function trendLabel(t){\n'
+        '  if(t==="NEW")return\'<span class="trend-badge trend-NEW">NEW</span>\';\n'
+        '  if(t==="up")return\'<span class="trend-up"> ↑</span>\';\n'
+        '  if(t==="down")return\'<span class="trend-down"> ↓</span>\';\n'
+        '  return\'<span class="trend-stable"> →</span>\';\n'
+        '}\n'
+        'async function loadTopics(range){\n'
+        '  var el=document.getElementById(range+"-content");\n'
+        '  try{\n'
+        '    var r=await fetch(CLOUD_API+"/topics?range="+range);\n'
+        '    var d=await r.json();\n'
+        '    var topics=d.topics||[];\n'
+        '    if(!topics.length){el.innerHTML=\'<div class="no-data">暂无数据</div>\';return;}\n'
+        '    var html=\'<div class="kw-cloud">\';\n'
+        '    for(var i=0;i<topics.length;i++){\n'
+        '      var t=topics[i];\n'
+        '      var heat=t.heat||"热门";\n'
+        '      html+=\'<div class="kw-chip" data-kw="\'+t.keyword.replace(/"/g,"&quot;")+\'" onclick="openModalCloud(this.dataset.kw)">\'+'
+        '\'<span class="kw-emoji">🔥</span><div>\'+'
+        '\'<span class="kw-word">\'+t.keyword+\'</span>\'+'
+        '\'<span class="kw-heat heat-\'+heat+\'">\'+heat+\'</span>\'+'
+        'trendLabel(t.trend)+'
+        '\'<div class="kw-summary">\'+( t.summary||"")+\'</div></div></div>\';\n'
+        '    }\n'
+        '    html+=\'</div>\';\n'
+        '    el.innerHTML=html;\n'
+        '  }catch(e){\n'
+        '    el.innerHTML=\'<div class="no-data">加载失败，请检查网络连接</div>\';\n'
+        '  }\n'
+        '}\n'
+        'function openModal(keyword){\n'
+        '  var s=SUMMARIES[keyword]||{};\n'
+        '  showModal(keyword,s,null);\n'
+        '}\n'
+        'async function openModalCloud(keyword){\n'
+        '  showModal(keyword,{},null);\n'
+        '  try{\n'
+        '    var r=await fetch(CLOUD_API+"/topic/"+encodeURIComponent(keyword));\n'
+        '    var d=await r.json();\n'
+        '    showModal(keyword,d,d.history||[]);\n'
+        '  }catch(e){}\n'
+        '}\n'
+        'function showModal(keyword,s,history){\n'
+        '  document.getElementById("modal-kw").textContent=keyword;\n'
+        '  document.getElementById("modal-brief").textContent=s.brief||"（暂无简介）";\n'
+        '  document.getElementById("modal-bg").textContent=s.background||"（暂无背景）";\n'
+        '  var pts=s.key_points||[];\n'
+        '  var ul=document.getElementById("modal-points");\n'
+        '  ul.innerHTML="";\n'
+        '  if(pts.length){for(var i=0;i<pts.length;i++){var li=document.createElement("li");li.textContent=pts[i];ul.appendChild(li);}}\n'
+        '  else{ul.innerHTML="<li>暂无要点</li>";}\n'
+        '  var srcs=s.sources||[];\n'
+        '  var srcEl=document.getElementById("modal-sources");\n'
+        '  srcEl.innerHTML=srcs.length?srcs.map(function(src){return\'<a href="#" target="_blank">\'+src+\'</a>\';}).join(""):"（暂无来源）";\n'
+        '  var histEl=document.getElementById("modal-hist-title");\n'
+        '  var canvas=document.getElementById("modal-chart");\n'
+        '  if(history&&history.length>0){histEl.style.display="";canvas.style.display="";drawChart(canvas,history);}\n'
+        '  else{histEl.style.display="none";canvas.style.display="none";}\n'
+        '  document.getElementById("modal-overlay").classList.add("open");\n'
+        '  document.body.style.overflow="hidden";\n'
+        '}\n'
+        'function closeModal(){\n'
+        '  document.getElementById("modal-overlay").classList.remove("open");\n'
+        '  document.body.style.overflow="";\n'
+        '}\n'
+        'document.addEventListener("keydown",function(e){if(e.key==="Escape")closeModal();});\n'
+        'function drawChart(canvas,history){\n'
+        '  var ctx=canvas.getContext("2d");\n'
+        '  var w=canvas.parentElement.offsetWidth||500;\n'
+        '  var h=80;canvas.width=w;canvas.height=h;\n'
+        '  ctx.clearRect(0,0,w,h);\n'
+        '  var counts=history.map(function(item){return Number(item.count)||0;});\n'
+        '  var maxC=Math.max.apply(null,counts.concat([1]));\n'
+        '  var barW=Math.floor(w/(counts.length+1));\n'
+        '  var pad=Math.max(2,Math.floor(barW*0.15));\n'
+        '  for(var i=0;i<counts.length;i++){\n'
+        '    var c=counts[i];\n'
+        '    var x=i*barW+pad;\n'
+        '    var barH=Math.max(2,Math.floor((c/maxC)*(h-20)));\n'
+        '    var y=h-barH-15;\n'
+        '    ctx.fillStyle="#388bfd";\n'
+        '    ctx.beginPath();\n'
+        '    if(ctx.roundRect){ctx.roundRect(x,y,barW-pad*2,barH,3);}else{ctx.rect(x,y,barW-pad*2,barH);}\n'
+        '    ctx.fill();\n'
+        '    if(history[i]&&history[i].date){ctx.fillStyle="#8b949e";ctx.font="9px sans-serif";ctx.fillText(history[i].date.slice(5),x,h-2);}\n'
+        '  }\n'
+        '}\n'
+        '</script>'
+    )
 
     html = _page_shell("AI 热词榜", "trending.html", body, TRENDING_CSS)
     TRENDING_HTML_PATH.write_text(html, encoding="utf-8")
@@ -2336,6 +2562,14 @@ def main():
 
     print("\n🔥 [4/8] AI 热词榜")
     trending = fetch_trending()
+    print("  生成热词简报...")
+    topic_summaries = generate_topic_summaries_with_claude(
+        trending.get("keywords", []),
+        trending.get("top_posts", []),
+    )
+    print(f"  ✅ 生成 {len(topic_summaries)} 条简报")
+    print("  推送热词到云端...")
+    push_topics_to_cloud(trending.get("keywords", []), topic_summaries)
 
     print("\n📈 [5/8] 模型竞技场 Benchmark")
     benchmarks = fetch_benchmarks()
@@ -2379,7 +2613,7 @@ def main():
         agent_decision,
     )
     generate_models_html(model_versions)
-    generate_trending_html(trending)
+    generate_trending_html(trending, topic_summaries)
     generate_benchmark_html(benchmarks)
     generate_tools_html(tools)
     generate_jobs_html(jobs)

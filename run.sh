@@ -13,7 +13,7 @@ source "$HOME/.zshrc" 2>/dev/null || true
 cd "$HOME/Projects/ai-daily" || exit 1
 
 # ── 启动 api.py（如果未在运行）──
-if pgrep -f "python3 api.py" > /dev/null 2>&1; then
+if lsof -ti :5001 > /dev/null 2>&1; then
   echo "ℹ  api.py 已在运行，跳过启动" | tee -a "$API_LOG"
 else
   echo "▶ 启动 api.py ..." | tee -a "$API_LOG"
@@ -24,10 +24,11 @@ else
     echo "✅ api.py 已启动 (PID: $API_PID)" | tee -a "$API_LOG"
   else
     echo "⚠  api.py 启动失败，查看 $API_LOG" | tee -a "$API_LOG"
+    true  # 不因 api.py 失败而中断主流程
   fi
 fi
 
-# ── 运行 fetch_news.py（输出追加到 run.log）──
+# ── 运行 fetch_news.py（同时输出到终端和 run.log）──
 {
   echo "=================================================="
   echo "▶ 开始运行: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -36,4 +37,4 @@ fi
 
   echo "✅ 运行完成: $(date '+%Y-%m-%d %H:%M:%S')"
   echo "=================================================="
-} >> "$LOG_FILE" 2>&1
+} 2>&1 | tee -a "$LOG_FILE"

@@ -54,6 +54,27 @@ def init_db():
                         created_at  TIMESTAMP DEFAULT NOW()
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS topic_history (
+                        id       SERIAL PRIMARY KEY,
+                        keyword  TEXT NOT NULL,
+                        heat     TEXT,
+                        summary  TEXT,
+                        date     TEXT NOT NULL,
+                        count    INTEGER DEFAULT 1,
+                        UNIQUE(keyword, date)
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS topic_summaries (
+                        keyword    TEXT PRIMARY KEY,
+                        brief      TEXT,
+                        background TEXT,
+                        key_points TEXT,
+                        sources    TEXT,
+                        updated_at TEXT
+                    )
+                """)
             conn.commit()
         print("✅ 数据库表初始化完成")
     except Exception as e:
@@ -94,7 +115,6 @@ def get_papers():
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-    # fallback: JSON 文件
     if not PAPERS_PATH.exists():
         return jsonify({"papers": [], "count": 0, "date": today})
     try:
@@ -145,7 +165,6 @@ def update_highlights():
         except Exception as e:
             return jsonify({"success": False, "error": str(e)}), 500
 
-    # 同时写入 JSON 文件作为备份
     payload = {
         "highlights":  highlights,
         "updated_at":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -196,7 +215,6 @@ def update_papers():
         except Exception as e:
             return jsonify({"success": False, "error": str(e)}), 500
 
-    # 同时写入 JSON 文件作为备份
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     PAPERS_PATH.write_text(
         json.dumps(body, ensure_ascii=False, indent=2),
@@ -211,6 +229,169 @@ def update_papers():
     })
 
 
+# ── GET /topics ───────────────────────────────────────────────
+@app.route("/topics", methods=["GET"])
+def get_topics():
+    range_ = request.args.get("range", "today")
+
+    if not DATABASE_URL:
+        return jsonify({"topics": [], "range": range_})
+
+    try:
+        if range_ == "today":
+            date_filter = "date = CURRENT_DATE"
+        elif range_ == "week":
+            date_filter = "date >= (CURRENT_DATE - INTERVAL '7 days')::text"
+        else:
+            date_filter = "date >= (CURRENT_DATE - INTERVAL '30 days')::text"
+
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f"""
+                    SELECT keyword,
+                           MAX(heat)    AS heat,
+                           MAX(summary) AS summary,
+                           SUM(count)   AS total_count,
+                           MAX(date)    AS last_seen
+                    FROM topic_history
+                    WHERE {date_filter}
+                    GROUP BY keyword
+                    ORDER BY total_count DESC
+                    LIMIT 30
+                """)
+                rows = cur.fetchall()
+
+                cur.execute("SELECT keyword, count FROM topic_history WHERE date = CURRENT_DATE::text")
+                today_counts = {r["keyword"]: r["count"] for r in cur.fetchall()}
+
+                cur.execute("SELECT keyword, count FROM topic_history WHERE date = (CURRENT_DATE - INTERVAL '1 day')::text")
+                yest_counts = {r["keyword"]: r["count"] for r in cur.fetchall()}
+
+        topics = []
+        for r in rows:
+            kw      = r["keyword"]
+            today_c = today_counts.get(kw, 0)
+            yest_c  = yest_counts.get(kw, 0)
+            if yest_c == 0 and today_c > 0:
+                trend = "NEW"
+            elif today_c > yest_c:
+                trend = "up"
+            elif today_c < yest_c:
+                trend = "down"
+            else:
+                trend = "stable"
+            topics.append({
+                "keyword":   kw,
+                "heat":      r["heat"],
+                "summary":   r["summary"],
+                "count":     r["total_count"],
+                "last_seen": r["last_seen"],
+                "trend":     trend,
+            })
+
+        return jsonify({"topics": topics, "range": range_})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── GET /topic/<keyword> ──────────────────────────────────────
+@app.route("/topic/<path:keyword>", methods=["GET"])
+def get_topic(keyword):
+    if not DATABASE_URL:
+        return jsonify({"keyword": keyword, "history": []})
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM topic_summaries WHERE keyword = %s", (keyword,))
+                s = cur.fetchone()
+
+                cur.execute("""
+                    SELECT date, count, heat FROM topic_history
+                    WHERE keyword = %s ORDER BY date ASC LIMIT 30
+                """, (keyword,))
+                history = [dict(r) for r in cur.fetchall()]
+
+        if s:
+            return jsonify({
+                "keyword":    s["keyword"],
+                "brief":      s["brief"],
+                "background": s["background"],
+                "key_points": json.loads(s["key_points"] or "[]"),
+                "sources":    json.loads(s["sources"]    or "[]"),
+                "updated_at": s["updated_at"],
+                "history":    history,
+            })
+        return jsonify({"keyword": keyword, "history": history})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── POST /update_topics ───────────────────────────────────────
+@app.route("/update_topics", methods=["POST"])
+def update_topics():
+    if not request.is_json:
+        return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400
+
+    body = request.get_json(silent=True)
+    if body is None:
+        return jsonify({"success": False, "error": "无法解析 JSON"}), 400
+
+    topics    = body.get("topics", [])
+    summaries = body.get("summaries", [])
+
+    if not DATABASE_URL:
+        return jsonify({"success": True, "message": "文件模式，跳过写入"})
+
+    try:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for t in topics:
+                    cur.execute("""
+                        INSERT INTO topic_history (keyword, heat, summary, date, count)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (keyword, date) DO UPDATE SET
+                            count   = topic_history.count + EXCLUDED.count,
+                            heat    = EXCLUDED.heat,
+                            summary = EXCLUDED.summary
+                    """, (
+                        t.get("keyword", ""),
+                        t.get("heat", "热门"),
+                        t.get("summary", ""),
+                        t.get("date", datetime.now().strftime("%Y-%m-%d")),
+                        t.get("count", 1),
+                    ))
+                for s in summaries:
+                    cur.execute("""
+                        INSERT INTO topic_summaries (keyword, brief, background, key_points, sources, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (keyword) DO UPDATE SET
+                            brief      = EXCLUDED.brief,
+                            background = EXCLUDED.background,
+                            key_points = EXCLUDED.key_points,
+                            sources    = EXCLUDED.sources,
+                            updated_at = EXCLUDED.updated_at
+                    """, (
+                        s.get("keyword", ""),
+                        s.get("brief", ""),
+                        s.get("background", ""),
+                        json.dumps(s.get("key_points", []), ensure_ascii=False),
+                        json.dumps(s.get("sources",    []), ensure_ascii=False),
+                        now_str,
+                    ))
+            conn.commit()
+
+        return jsonify({
+            "success":         True,
+            "topics_count":    len(topics),
+            "summaries_count": len(summaries),
+            "message":         f"已写入 {len(topics)} 个热词，{len(summaries)} 条简报",
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # ── 健康检查 ──────────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
@@ -222,17 +403,19 @@ def health():
                     paper_count = cur.fetchone()[0]
                     cur.execute("SELECT COUNT(*) FROM highlights WHERE created_at::date = CURRENT_DATE")
                     highlight_count = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM topic_history WHERE date = CURRENT_DATE::text")
+                    topic_count = cur.fetchone()[0]
             return jsonify({
                 "status":          "ok",
                 "source":          "postgresql",
                 "paper_count":     paper_count,
                 "highlight_count": highlight_count,
+                "topic_count":     topic_count,
                 "time":            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
         except Exception as e:
             return jsonify({"status": "error", "error": str(e)}), 500
 
-    # fallback: 文件模式
     has_papers     = PAPERS_PATH.exists()
     has_highlights = HIGHLIGHTS_PATH.exists()
     highlight_count = 0
@@ -256,6 +439,9 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     print("🚀 AI Daily API 服务启动")
     print(f"   GET  http://localhost:{port}/papers")
+    print(f"   GET  http://localhost:{port}/topics")
+    print(f"   GET  http://localhost:{port}/topic/<keyword>")
+    print(f"   POST http://localhost:{port}/update_topics")
     print(f"   POST http://localhost:{port}/update_highlights")
     print(f"   GET  http://localhost:{port}/health")
     app.run(host="0.0.0.0", port=port, debug=False)
