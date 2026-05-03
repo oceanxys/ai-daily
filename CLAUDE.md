@@ -1,0 +1,95 @@
+# ai-daily — CLAUDE.md
+
+## 项目概览
+
+个人 AI 学习助手系统。每天 22:00 由 macOS launchd 自动触发，抓取 AI 资讯（O'Reilly Radar、TechCrunch）、arXiv CS.AI 论文、Reddit 热帖，通过 Claude API 总结分类后生成 8 个静态 HTML 页面；同时把论文、精选高亮、热词、文章摘要推送到 Railway PostgreSQL，供扣子 Agent 通过 HTTP API 消费。
+
+---
+
+## 项目结构
+
+| 文件 / 目录 | 作用 |
+|---|---|
+| `fetch_news.py` | 主流程：抓取 → Claude 总结 → 生成页面 → 推送云端 |
+| `brain.py` | Agent 大脑：sense / think / act / reflect 四阶段决策循环 |
+| `api.py` | Flask REST API（本地端口 5001 / Railway 云端），管理所有数据读写 |
+| `run.sh` | 启动 api.py 后台进程，再运行 fetch_news.py，日志写 logs/run.log |
+| `memory.db` | 本地 SQLite：文章去重、话题追踪、分类偏好 EMA 权重（不上云）|
+| `output/` | 生成的 8 个静态 HTML 页面（index / today / models / trending / benchmark / tools / jobs / archive）|
+| `logs/` | run.log（主流程日志）、api.log（API 服务日志）|
+| `data/` | papers_today.json、highlights.json（本地 JSON 备份）|
+| `archive/` | 历史文章存档（按日期 JSON）|
+| `DEVLOG.md` | 开发日志，每次改动后更新 |
+
+---
+
+## 云端配置
+
+- **Railway 项目**：zooming-education
+- **API 基础地址**：`https://web-production-6e883.up.railway.app`
+- **部署方式**：push 到 GitHub `main` 分支自动触发重新部署
+
+### PostgreSQL 表结构
+
+| 表名 | 用途 |
+|---|---|
+| `papers` | arXiv 论文（title / authors / abstract / arxiv_url / published / categories）|
+| `highlights` | 精选论文高亮（title / summary / reason / arxiv_url）|
+| `topic_history` | 每日热词记录（keyword / heat / summary / date / count，UNIQUE keyword+date）|
+| `topic_summaries` | 热词详情（keyword PK / brief / background / key_points / sources）|
+| `articles_cloud` | 每日文章摘要（title / chinese_title / chinese_summary / category / source / link UNIQUE / date）|
+
+### API 路由速查
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/papers` | 今日论文列表 |
+| GET | `/topics?range=today\|week\|month` | 热词榜，含 trend 标签 |
+| GET | `/topic/<keyword>` | 热词详情 + 30 天历史 |
+| GET | `/articles?date=YYYY-MM-DD&category=xxx` | 指定日期文章列表 |
+| POST | `/update_papers` | 写入论文 |
+| POST | `/update_highlights` | 写入精选高亮 |
+| POST | `/update_topics` | upsert 热词和简报 |
+| POST | `/update_articles` | 写入文章摘要（ON CONFLICT DO NOTHING）|
+| GET | `/health` | 服务状态 + 各表今日计数 |
+
+---
+
+## 开发规范
+
+### 运行本地脚本
+
+```bash
+source ~/.zshrc && python3 fetch_news.py
+```
+
+必须先 source，否则 `ANTHROPIC_API_KEY` 不在环境变量中，所有 Claude 调用都会失败。
+
+### 修改 api.py 后
+
+必须 push 到 GitHub，Railway 会自动重新部署（约 30 秒）。不需要手动重启。
+
+### 本地 vs 云端数据库
+
+| | 本地 | 云端 |
+|---|---|---|
+| 数据库 | SQLite（`memory.db`）| PostgreSQL（Railway）|
+| 用途 | 文章去重、话题追踪、分类偏好 | 对外 API、扣子 Agent 消费 |
+| 同步方式 | 不直连，通过 HTTP API 推送 | — |
+
+**绝对不要**直连 Railway PostgreSQL 写数据，所有写入都走 `api.py` 的 POST 接口。
+
+### 常量管理
+
+云端 API 地址统一用 `fetch_news.py` 顶部定义的 `CLOUD_BASE` 常量，不要在函数里硬编码。
+
+---
+
+## 后续规划
+
+1. **数据全量上云**：把本地 memory.db 里的文章去重记录、话题追踪、分类偏好权重也同步到 PostgreSQL，彻底摆脱对本地 SQLite 的依赖
+2. **扣子多 Agent 系统**：在扣子平台搭建多 Agent 协同，消费 Railway 云端数据
+   - 资讯 Agent：每日拉取 `/articles` 推送到用户
+   - 论文 Agent：跟踪 `/papers` 和 `/highlights`
+   - 热词 Agent：监控 `/topics` 趋势变化并预警
+3. **前端展示**：考虑把 8 个静态 HTML 部署到 Vercel/Netlify，直接调用 Railway API 动态渲染
