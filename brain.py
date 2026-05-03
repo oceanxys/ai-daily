@@ -158,7 +158,7 @@ class Agent:
 
 {state_text}
 
-请按以下优先级规则做出唯一决策，输出 JSON（字符串不含双引号）：
+请按以下优先级规则做出唯一决策，输出严格合法的 JSON，所有字符串必须用双引号包裹：
 
 优先级（从高到低）：
 1. long_running_topics 不为空（有话题连续5天以上）→ topic_summary
@@ -166,11 +166,12 @@ class Agent:
 3. yesterday_count < 10（昨日文章不足10条）→ find_more
 4. 其他情况 → normal
 
+严格按以下格式输出，不要添加其他文字：
 {{
   "action": "normal",
-  "reason": "决策理由（30字以内）",
-  "targets": ["需要深挖的话题或来源"],
-  "priority_categories": ["今天应该优先展示的分类"]
+  "reason": "决策理由30字以内",
+  "targets": [],
+  "priority_categories": []
 }}
 
 action 只能是 normal / find_more / special_report / topic_summary 之一。"""
@@ -184,6 +185,15 @@ action 只能是 normal / find_more / special_report / topic_summary 之一。""
             )
             text = msg.content[0].text
             text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
+            # 修复数组中裸字符串（如 [科技, 财经] → ["科技", "财经"]）
+            text = re.sub(
+                r'\[([^\[\]"]+?)\]',
+                lambda mo: "[" + ", ".join(
+                    f'"{w.strip()}"' if w.strip() and not w.strip().startswith('"') else w.strip()
+                    for w in mo.group(1).split(",")
+                ) + "]",
+                text,
+            )
             # 尝试直接解析
             try:
                 return json.loads(text)
