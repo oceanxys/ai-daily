@@ -788,6 +788,40 @@ def save_articles_to_db(summaries: list[dict]) -> None:
     conn.close()
 
 
+def push_articles_to_cloud(summaries: list[dict]) -> None:
+    if not summaries:
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    articles = [
+        {
+            "title":           s.get("original_title", ""),
+            "chinese_title":   s.get("chinese_title", ""),
+            "chinese_summary": s.get("chinese_summary", ""),
+            "category":        s.get("category", "其他"),
+            "source":          s.get("source", ""),
+            "link":            s.get("link", ""),
+        }
+        for s in summaries
+        if s.get("link")
+    ]
+    if not articles:
+        return
+    try:
+        with httpx.Client(timeout=20) as c:
+            r = c.post(
+                f"{CLOUD_BASE}/update_articles",
+                json={"articles": articles, "date": today},
+                headers={"Content-Type": "application/json"},
+            )
+            if r.status_code == 200:
+                d = r.json()
+                print(f"  ✅ 云端入库：新增 {d.get('inserted', 0)} 篇，跳过重复 {len(articles) - d.get('inserted', 0)} 篇")
+            else:
+                print(f"  ⚠ 文章推送失败: HTTP {r.status_code}")
+    except Exception as e:
+        print(f"  ⚠ 文章推送到云端失败: {e}")
+
+
 def update_topics_db(focus: Optional[dict]) -> None:
     """将检测到的热点话题写入 topics 表，更新连续出现天数。"""
     if not focus or not focus.get("topic"):
@@ -2549,6 +2583,7 @@ def main():
 
     print("\n🧠 [3.6] 记忆写入")
     save_articles_to_db(summaries)
+    push_articles_to_cloud(summaries)
     update_topics_db(focus)
     weights = update_preferences_db(summaries)
     persistent_topics = get_persistent_topics(min_days=3)

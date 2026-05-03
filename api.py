@@ -75,6 +75,19 @@ def init_db():
                         updated_at TEXT
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS articles_cloud (
+                        id               SERIAL PRIMARY KEY,
+                        title            TEXT,
+                        chinese_title    TEXT,
+                        chinese_summary  TEXT,
+                        category         TEXT,
+                        source           TEXT,
+                        link             TEXT UNIQUE,
+                        date             TEXT,
+                        created_at       TIMESTAMP DEFAULT NOW()
+                    )
+                """)
             conn.commit()
         print("✅ 数据库表初始化完成")
     except Exception as e:
@@ -388,6 +401,82 @@ def update_topics():
             "summaries_count": len(summaries),
             "message":         f"已写入 {len(topics)} 个热词，{len(summaries)} 条简报",
         })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── GET /articles ────────────────────────────────────────────
+@app.route("/articles", methods=["GET"])
+def get_articles():
+    date     = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+    category = request.args.get("category")
+
+    if not DATABASE_URL:
+        return jsonify({"articles": [], "date": date})
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if category:
+                    cur.execute("""
+                        SELECT title, chinese_title, chinese_summary, category, source, link, date
+                        FROM articles_cloud
+                        WHERE date = %s AND category = %s
+                        ORDER BY id
+                    """, (date, category))
+                else:
+                    cur.execute("""
+                        SELECT title, chinese_title, chinese_summary, category, source, link, date
+                        FROM articles_cloud
+                        WHERE date = %s
+                        ORDER BY id
+                    """, (date,))
+                rows = [dict(r) for r in cur.fetchall()]
+        return jsonify({"articles": rows, "count": len(rows), "date": date})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── POST /update_articles ─────────────────────────────────────
+@app.route("/update_articles", methods=["POST"])
+def update_articles():
+    if not request.is_json:
+        return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400
+
+    body = request.get_json(silent=True)
+    if body is None:
+        return jsonify({"success": False, "error": "无法解析 JSON"}), 400
+
+    articles = body.get("articles", [])
+    date     = body.get("date", datetime.now().strftime("%Y-%m-%d"))
+
+    if not DATABASE_URL:
+        return jsonify({"success": True, "message": "文件模式，跳过写入"})
+
+    try:
+        inserted = 0
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for a in articles:
+                    cur.execute("""
+                        INSERT INTO articles_cloud
+                            (title, chinese_title, chinese_summary, category, source, link, date)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (link) DO NOTHING
+                    """, (
+                        a.get("title", ""),
+                        a.get("chinese_title", ""),
+                        a.get("chinese_summary", ""),
+                        a.get("category", "其他"),
+                        a.get("source", ""),
+                        a.get("link", ""),
+                        date,
+                    ))
+                    if cur.rowcount:
+                        inserted += 1
+            conn.commit()
+        return jsonify({"success": True, "inserted": inserted, "total": len(articles),
+                        "message": f"新增 {inserted} 篇，跳过重复 {len(articles)-inserted} 篇"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
