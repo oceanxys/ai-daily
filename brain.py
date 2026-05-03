@@ -158,7 +158,7 @@ class Agent:
 
 {state_text}
 
-请按以下优先级规则做出唯一决策，输出严格合法的 JSON，所有字符串必须用双引号包裹：
+请按以下优先级规则做出唯一决策，严格按格式输出 JSON，不要添加任何其他文字：
 
 优先级（从高到低）：
 1. long_running_topics 不为空（有话题连续5天以上）→ topic_summary
@@ -166,15 +166,15 @@ class Agent:
 3. yesterday_count < 10（昨日文章不足10条）→ find_more
 4. 其他情况 → normal
 
-严格按以下格式输出，不要添加其他文字：
+输出格式（action 和 targets 是唯一需要填写的字段）：
 {{
   "action": "normal",
   "reason": "决策理由30字以内",
-  "targets": [],
-  "priority_categories": []
+  "targets": []
 }}
 
-action 只能是 normal / find_more / special_report / topic_summary 之一。"""
+action 只能是 normal / find_more / special_report / topic_summary 之一。
+targets 只在 find_more/special_report/topic_summary 时填写相关话题，否则为空数组。"""
 
         client = anthropic.Anthropic()
         try:
@@ -206,12 +206,7 @@ action 只能是 normal / find_more / special_report / topic_summary 之一。""
         except Exception as e:
             print(f"  ⚠ Agent think 失败: {e}")
 
-        return {
-            "action":              "normal",
-            "reason":              "决策模块异常，采用默认流程",
-            "targets":             [],
-            "priority_categories": [],
-        }
+        return {"action": "normal", "reason": "决策模块异常，采用默认流程", "targets": []}
 
     # ── 行动阶段 ──────────────────────────────────────
 

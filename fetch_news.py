@@ -2283,8 +2283,7 @@ def main():
     _agent = None
     agent_decision = {
         "action": "normal", "reason": "Agent 未运行",
-        "targets": [], "priority_categories": [],
-        "_extra_articles": [], "_act_status": "",
+        "targets": [], "_extra_articles": [], "_act_status": "",
     }
     try:
         _agent = Agent()
