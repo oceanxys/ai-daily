@@ -111,6 +111,52 @@
 
 ---
 
+---
+
+## 2026-05-02（续）
+
+### AI 热词榜重大升级
+
+**数据库（api.py）**
+
+- 新增 `topic_history` 表：`(keyword, heat, summary, date, count, UNIQUE(keyword, date))`，支持每日 UPSERT（count 累加）
+- 新增 `topic_summaries` 表：`keyword TEXT PRIMARY KEY`，存储 brief / background / key_points / sources / updated_at
+- 新增 `GET /topics?range=today/week/month`：按时段聚合，计算 trend（NEW / up / down / stable）
+- 新增 `GET /topic/<keyword>`：返回详情 + 最近 30 天历史数组
+- 新增 `POST /update_topics`：同时 upsert topic_history 和 topic_summaries
+- `/health` 新增 `topic_count` 字段
+
+**抓取与生成（fetch_news.py）**
+
+- 新增 `generate_topic_summaries_with_claude(keywords, top_posts)`：一次调用 Claude 为所有热词生成 brief / background / key_points / sources
+- 新增 `push_topics_to_cloud(keywords, summaries)`：POST 到 Railway `/update_topics`
+- `main()` 在 `fetch_trending()` 后依次调用两个新函数
+- `generate_trending_html()` 全面重设计：
+  - **Tab 切换**：📅 今日 / 📆 本周 / 🗓 本月
+  - **今日 Tab**：静态 HTML，关键词 Chip 可点击
+  - **本周 / 本月 Tab**：JS 动态 fetch 云端 `/topics?range=` 并渲染，显示 trend 标签（NEW / ↑ / ↓ / →）
+  - **详情 Modal**：点击 Chip 弹出，显示 brief / background / key_points / sources；本周本月点击额外 fetch `/topic/<keyword>` 展示历史趋势迷你柱形图（Canvas）
+  - 支持 ESC 关闭、点击遮罩关闭
+- 常量 `CLOUD_BASE = "https://web-production-6e883.up.railway.app"` 统一管理云端地址
+
+**Reddit 帖子链接修复**（同一批次）
+
+- 抓取时保留真实 permalink：`URL:https://reddit.com/r/…`
+- Claude prompt 要求返回 `post_id`（数字字符串），本地建立 `url_map` 在解析后回填
+- 彻底解决「查看原帖」404 问题
+
+**Bug 修复**
+
+| Bug | 修复方式 |
+|-----|---------|
+| Python 3.9 f-string 表达式不允许反斜杠 | 将含 `\\"` 的 fallback 字符串提取为 `kw_cloud_html` / `post_grid_html` 变量 |
+| Agent think() JSON 解析失败（裸中文数组） | 删除 `priority_categories` 字段，保留 action / reason / targets |
+| run.sh set -e + kill -0 导致主流程中断 | else 分支加 `true` |
+| pgrep 匹配不到 api.py 进程 | 改用 `lsof -ti :5001` |
+| 输出仅写日志不打终端 | 改用 `2>&1 \| tee -a "$LOG_FILE"` |
+
+---
+
 ## 待办 / 已知问题
 
 - [ ] Railway 部署时需在 web 服务 Variables 里手动设置 `DATABASE_URL`
