@@ -2280,8 +2280,17 @@ def main():
     save_arxiv_papers()
 
     print("\n🧠 [2.3] Agent 大脑决策")
-    _agent = Agent()
-    agent_decision = _agent.run()
+    _agent = None
+    agent_decision = {
+        "action": "normal", "reason": "Agent 未运行",
+        "targets": [], "priority_categories": [],
+        "_extra_articles": [], "_act_status": "",
+    }
+    try:
+        _agent = Agent()
+        agent_decision = _agent.run()
+    except Exception as _e:
+        print(f"  ⚠ Agent 启动失败（不影响主流程）: {_e}")
     extra_articles = agent_decision.get("_extra_articles", [])
     if extra_articles:
         articles.extend(extra_articles)
@@ -2385,8 +2394,9 @@ def main():
     print(f"  分类偏好权重:{_format_weight_log(weights)}")
     print("=" * 52)
 
-    _agent.reflect(agent_decision, final_count=len(summaries),
-                   result=agent_decision.get("_act_status", ""))
+    if _agent:
+        _agent.reflect(agent_decision, final_count=len(summaries),
+                       result=agent_decision.get("_act_status", ""))
 
     print(f"\n🎉 完成！主页：file://{INDEX_HTML_PATH}")
 
