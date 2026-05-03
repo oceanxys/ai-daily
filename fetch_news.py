@@ -159,8 +159,8 @@ MIN_ARTICLES  = 5    # 低于此数量触发备用源
 RSS_SOURCES = [
     {
         "name":    "O'Reilly Radar",
-        "url":     "https://feeds.feedburner.com/oreilly/radar",
-        "backup":  "https://www.oreilly.com/radar/feed/",
+        "url":     "https://www.oreilly.com/radar/feed/",
+        "backup":  "https://oreilly.com/radar/feed/",
         "ai_filter": False,
     },
     {
