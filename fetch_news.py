@@ -13,6 +13,7 @@ import anthropic
 from typing import Optional, Union
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from brain import Agent
 
 # ── 输出路径 ──
 
@@ -1336,6 +1337,72 @@ article_indices 填相关文章的序号列表（从1开始）。"""
 #  今日日报 (today.html)
 # ══════════════════════════════════════════════
 
+_ACTION_META = {
+    "normal":         ("正常流程",   "#8b949e"),
+    "find_more":      ("补充抓取",   "#f0883e"),
+    "special_report": ("专题生成",   "#bc8cff"),
+    "topic_summary":  ("时间线整理", "#3fb950"),
+}
+
+
+def _agent_css() -> str:
+    return """
+/* ── Agent 决策区块 ── */
+.agent-block{background:rgba(88,166,255,.04);border:1px solid rgba(88,166,255,.18);
+  border-radius:12px;padding:.9rem 1.3rem;margin-bottom:1.3rem;
+  display:flex;flex-direction:column;gap:.45rem}
+.agent-hdr{display:flex;align-items:center;gap:.65rem;flex-wrap:wrap}
+.agent-icon{font-size:1rem}
+.agent-title{font-size:.72rem;font-weight:700;color:var(--t3);
+  letter-spacing:.06em;text-transform:uppercase}
+.agent-badge{font-size:.72rem;font-weight:700;padding:.15rem .55rem;
+  border-radius:20px;border:1px solid transparent}
+.agent-extra{font-size:.75rem;color:var(--orange)}
+.agent-reason{font-size:.86rem;color:var(--t2);line-height:1.6}
+.agent-targets{display:flex;flex-wrap:wrap;gap:.35rem}
+.agent-tag{font-size:.73rem;padding:.15rem .55rem;background:rgba(88,166,255,.08);
+  color:var(--blue);border:1px solid rgba(88,166,255,.2);border-radius:20px}
+.agent-result{font-size:.77rem;color:var(--t3)}
+"""
+
+
+def _render_agent_block(decision: Optional[dict]) -> str:
+    if not decision:
+        return ""
+    action  = decision.get("action", "normal")
+    reason  = decision.get("reason", "")
+    targets = decision.get("targets", [])
+    status  = decision.get("_act_status", "")
+    extra   = decision.get("_extra_articles", [])
+
+    label, color = _ACTION_META.get(action, ("未知", "#8b949e"))
+
+    targets_html = ""
+    if targets:
+        tags = "".join(f'<span class="agent-tag">{t}</span>' for t in targets)
+        targets_html = f'<div class="agent-targets">{tags}</div>'
+
+    extra_note = (
+        f'<span class="agent-extra">补充了 {len(extra)} 篇文章</span>' if extra else ""
+    )
+    result_html = (
+        f'<div class="agent-result">执行结果：{status}</div>'
+        if status and status != "normal flow" else ""
+    )
+
+    return f"""<div class="agent-block">
+  <div class="agent-hdr">
+    <span class="agent-icon">🧠</span>
+    <span class="agent-title">今日 Agent 决策</span>
+    <span class="agent-badge" style="color:{color};border-color:{color};background:{color}18">{label}</span>
+    {extra_note}
+  </div>
+  <div class="agent-reason">{reason}</div>
+  {targets_html}
+  {result_html}
+</div>"""
+
+
 def generate_today_html(
     summaries:         list[dict],
     warnings:          Optional[list] = None,
@@ -1345,6 +1412,7 @@ def generate_today_html(
     filtered_count:    int = 0,
     category_order:    Optional[list] = None,
     highlights:        Optional[list] = None,
+    agent_decision:    Optional[dict] = None,
 ) -> None:
     now      = datetime.now()
     date_str = now.strftime("%Y年%m月%d日")
@@ -1463,8 +1531,9 @@ def generate_today_html(
 </div>"""
 
     highlights_html = _render_highlights_block(highlights or [])
-    body = warn_html + stats_bar + "\n" + tracking_html + focus_html + highlights_html + sections + report_html
-    extra_css = NEWS_CSS + _mem_panel_css()
+    agent_html      = _render_agent_block(agent_decision)
+    body = warn_html + agent_html + stats_bar + "\n" + tracking_html + focus_html + highlights_html + sections + report_html
+    extra_css = NEWS_CSS + _mem_panel_css() + _agent_css()
     html = _page_shell(f"AI 日报 · {date_str}", "today.html", body, extra_css)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(html, encoding="utf-8")
@@ -2210,6 +2279,14 @@ def main():
     print("\n📄 [2.1] 保存 arXiv 论文")
     save_arxiv_papers()
 
+    print("\n🧠 [2.3] Agent 大脑决策")
+    _agent = Agent()
+    agent_decision = _agent.run()
+    extra_articles = agent_decision.get("_extra_articles", [])
+    if extra_articles:
+        articles.extend(extra_articles)
+        print(f"  + Agent 补充 {len(extra_articles)} 篇文章，当前合计 {len(articles)} 篇")
+
     print("\n🧹 [2.5] 去重过滤")
     articles, filtered_count = dedup_articles(articles)
     print(f"  过滤重复 {filtered_count} 条，剩余 {len(articles)} 条待总结")
@@ -2280,6 +2357,7 @@ def main():
         filtered_count,
         cat_order,
         highlights,
+        agent_decision,
     )
     generate_models_html(model_versions)
     generate_trending_html(trending)
@@ -2306,6 +2384,9 @@ def main():
         print(f"    {icon} {src}: {status}")
     print(f"  分类偏好权重:{_format_weight_log(weights)}")
     print("=" * 52)
+
+    _agent.reflect(agent_decision, final_count=len(summaries),
+                   result=agent_decision.get("_act_status", ""))
 
     print(f"\n🎉 完成！主页：file://{INDEX_HTML_PATH}")
 
