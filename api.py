@@ -481,6 +481,38 @@ def update_articles():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ── 全量统计 ──────────────────────────────────────────────────
+@app.route("/stats", methods=["GET"])
+def stats():
+    if not DATABASE_URL:
+        return jsonify({"error": "no database"}), 503
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM papers")
+                papers_total = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM highlights")
+                highlights_total = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM topic_history")
+                topic_history_total = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM topic_summaries")
+                topic_summaries_total = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM articles_cloud")
+                articles_total = cur.fetchone()[0]
+        return jsonify({
+            "tables": {
+                "papers":          papers_total,
+                "highlights":      highlights_total,
+                "topic_history":   topic_history_total,
+                "topic_summaries": topic_summaries_total,
+                "articles_cloud":  articles_total,
+            },
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── 健康检查 ──────────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
