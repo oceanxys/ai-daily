@@ -1779,6 +1779,69 @@ def push_topics_to_cloud(keywords: list, summaries: list) -> None:
         print(f"  ⚠ 热词推送到云端失败: {e}")
 
 
+def generate_highlights(papers: list) -> list:
+    if not papers:
+        return []
+    candidates = []
+    for p in papers[:50]:
+        candidates.append(f"- 标题: {p.get('title', '')}\n  摘要: {p.get('abstract', '')[:200]}\n  URL: {p.get('arxiv_url', '')}")
+    candidates_text = "\n\n".join(candidates)
+    prompt = f"""你是一位 AI 研究领域的专家编辑。以下是今日 arXiv 论文列表，请从中筛选出 3 篇最有价值、最值得关注的论文。
+
+选择标准：
+1. 方法创新性强，解决了真实问题
+2. 实用价值高，有实际落地意义
+3. 影响面广，对领域有推动作用
+
+论文列表：
+{candidates_text}
+
+请返回 JSON 格式（数组，3个元素）：
+[
+  {{
+    "title": "论文英文原标题",
+    "summary": "中文摘要，100字以内，说明核心贡献",
+    "reason": "推荐理由，50字以内",
+    "arxiv_url": "论文链接"
+  }}
+]
+
+只返回 JSON 数组，不要其他内容。"""
+    client = anthropic.Anthropic()
+    try:
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = msg.content[0].text
+        text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
+        m = re.search(r"\[.*\]", text, re.DOTALL)
+        if m:
+            return json.loads(m.group())
+    except Exception as e:
+        print(f"  ⚠ 精选论文生成失败: {e}")
+    return []
+
+
+def push_highlights_to_cloud(highlights: list) -> None:
+    if not highlights:
+        return
+    try:
+        with httpx.Client(timeout=15) as c:
+            r = c.post(
+                f"{CLOUD_BASE}/update_highlights",
+                json=highlights,
+                headers={"Content-Type": "application/json"},
+            )
+            if r.status_code == 200:
+                print(f"  ✅ 已推送 {len(highlights)} 篇精选论文到云端")
+            else:
+                print(f"  ⚠ 精选论文推送失败: HTTP {r.status_code}")
+    except Exception as e:
+        print(f"  ⚠ 精选论文推送到云端失败: {e}")
+
+
 def generate_trending_html(data: dict, topic_summaries: list = None) -> None:
     now = datetime.now()
     keywords  = data.get("keywords", [])
@@ -2551,7 +2614,21 @@ def main():
     articles = fetch_news()
 
     print("\n📄 [2.1] 保存 arXiv 论文")
-    save_arxiv_papers()
+    papers_count = save_arxiv_papers()
+
+    print("\n⭐ [2.2] 生成精选论文")
+    _papers_for_highlights = []
+    try:
+        _pdata = json.loads((DATA_DIR / "papers_today.json").read_text(encoding="utf-8"))
+        _papers_for_highlights = _pdata.get("papers", _pdata) if isinstance(_pdata, dict) else _pdata
+    except Exception:
+        pass
+    highlights = generate_highlights(_papers_for_highlights)
+    if highlights:
+        print(f"  ✅ 生成 {len(highlights)} 篇精选论文")
+        push_highlights_to_cloud(highlights)
+    else:
+        print("  ⚠ 精选论文生成失败或无数据")
 
     print("\n🧠 [2.3] Agent 大脑决策")
     _agent = None
