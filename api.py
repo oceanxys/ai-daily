@@ -252,7 +252,7 @@ def get_topics():
 
     try:
         if range_ == "today":
-            date_filter = "date = CURRENT_DATE"
+            date_filter = "date = CURRENT_DATE::text"
         elif range_ == "week":
             date_filter = "date >= (CURRENT_DATE - INTERVAL '7 days')::text"
         else:
