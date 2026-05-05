@@ -251,12 +251,13 @@ def get_topics():
         return jsonify({"topics": [], "range": range_})
 
     try:
+        cst_today = "(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date"
         if range_ == "today":
-            date_filter = "date = CURRENT_DATE::text"
+            date_filter = f"date = {cst_today}::text"
         elif range_ == "week":
-            date_filter = "date >= (CURRENT_DATE - INTERVAL '7 days')::text"
+            date_filter = f"date >= ({cst_today} - INTERVAL '7 days')::text"
         else:
-            date_filter = "date >= (CURRENT_DATE - INTERVAL '30 days')::text"
+            date_filter = f"date >= ({cst_today} - INTERVAL '30 days')::text"
 
         with get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -274,10 +275,10 @@ def get_topics():
                 """)
                 rows = cur.fetchall()
 
-                cur.execute("SELECT keyword, count FROM topic_history WHERE date = CURRENT_DATE::text")
+                cur.execute("SELECT keyword, count FROM topic_history WHERE date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date::text")
                 today_counts = {r["keyword"]: r["count"] for r in cur.fetchall()}
 
-                cur.execute("SELECT keyword, count FROM topic_history WHERE date = (CURRENT_DATE - INTERVAL '1 day')::text")
+                cur.execute("SELECT keyword, count FROM topic_history WHERE date = ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date - INTERVAL '1 day')::text")
                 yest_counts = {r["keyword"]: r["count"] for r in cur.fetchall()}
 
         topics = []
