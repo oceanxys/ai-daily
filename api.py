@@ -102,18 +102,31 @@ init_db()
 # ── GET /papers ──────────────────────────────────────────────
 @app.route("/papers", methods=["GET"])
 def get_papers():
-    today = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")
+    today    = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")
+    limit    = min(int(request.args.get("limit", 10)), 50)
+    category = request.args.get("category", "").strip()
 
     if DATABASE_URL:
         try:
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute("""
-                        SELECT title, authors, abstract, arxiv_url, published, categories
-                        FROM papers
-                        WHERE (created_at + INTERVAL '8 hours')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date
-                        ORDER BY id
-                    """)
+                    if category:
+                        cur.execute("""
+                            SELECT title, authors, abstract, arxiv_url, published, categories
+                            FROM papers
+                            WHERE (created_at + INTERVAL '8 hours')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date
+                              AND categories::text LIKE %s
+                            ORDER BY id
+                            LIMIT %s
+                        """, (f"%{category}%", limit))
+                    else:
+                        cur.execute("""
+                            SELECT title, authors, abstract, arxiv_url, published, categories
+                            FROM papers
+                            WHERE (created_at + INTERVAL '8 hours')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date
+                            ORDER BY id
+                            LIMIT %s
+                        """, (limit,))
                     rows = cur.fetchall()
             papers = []
             for r in rows:
@@ -138,7 +151,10 @@ def get_papers():
         papers = []
         for p in raw_papers:
             authors = p.get("authors", "")
+            if category and category not in str(p.get("categories", [])):
+                continue
             papers.append({**p, "authors": ", ".join(authors) if isinstance(authors, list) else authors})
+        papers = papers[:limit]
         return jsonify({"papers": papers, "count": len(papers), "date": today})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
