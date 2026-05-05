@@ -12,6 +12,9 @@ import feedparser
 import anthropic
 from typing import Optional, Union
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
+
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 from pathlib import Path
 from brain import Agent
 
@@ -791,7 +794,7 @@ def save_articles_to_db(summaries: list[dict]) -> None:
 def push_articles_to_cloud(summaries: list[dict]) -> None:
     if not summaries:
         return
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")
     articles = [
         {
             "title":           s.get("original_title", ""),
@@ -1748,7 +1751,7 @@ def generate_topic_summaries_with_claude(keywords: list, top_posts: list) -> lis
 
 
 def push_topics_to_cloud(keywords: list, summaries: list) -> None:
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")
     topics_payload = [
         {
             "keyword": k.get("keyword", ""),

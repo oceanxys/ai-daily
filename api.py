@@ -3,8 +3,9 @@
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras
@@ -14,6 +15,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
+SHANGHAI_TZ     = ZoneInfo("Asia/Shanghai")
 DATA_DIR        = Path.home() / "Projects" / "ai-daily" / "data"
 PAPERS_PATH     = DATA_DIR / "papers_today.json"
 HIGHLIGHTS_PATH = DATA_DIR / "highlights.json"
@@ -100,7 +102,7 @@ init_db()
 # ── GET /papers ──────────────────────────────────────────────
 @app.route("/papers", methods=["GET"])
 def get_papers():
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")
 
     if DATABASE_URL:
         try:
@@ -180,7 +182,7 @@ def update_highlights():
 
     payload = {
         "highlights":  highlights,
-        "updated_at":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at":  datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         "count":       len(highlights),
     }
     HIGHLIGHTS_PATH.write_text(
@@ -251,13 +253,18 @@ def get_topics():
         return jsonify({"topics": [], "range": range_})
 
     try:
-        cst_today = "(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date"
+        now_cst    = datetime.now(SHANGHAI_TZ)
+        today_str  = now_cst.strftime("%Y-%m-%d")
+        week_str   = (now_cst - timedelta(days=7)).strftime("%Y-%m-%d")
+        month_str  = (now_cst - timedelta(days=30)).strftime("%Y-%m-%d")
+        yest_str   = (now_cst - timedelta(days=1)).strftime("%Y-%m-%d")
+
         if range_ == "today":
-            date_filter = f"date = {cst_today}::text"
+            date_filter, params = "date = %s", [today_str]
         elif range_ == "week":
-            date_filter = f"date >= ({cst_today} - INTERVAL '7 days')::text"
+            date_filter, params = "date >= %s", [week_str]
         else:
-            date_filter = f"date >= ({cst_today} - INTERVAL '30 days')::text"
+            date_filter, params = "date >= %s", [month_str]
 
         with get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -272,13 +279,13 @@ def get_topics():
                     GROUP BY keyword
                     ORDER BY total_count DESC
                     LIMIT 30
-                """)
+                """, params)
                 rows = cur.fetchall()
 
-                cur.execute("SELECT keyword, count FROM topic_history WHERE date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date::text")
+                cur.execute("SELECT keyword, count FROM topic_history WHERE date = %s", (today_str,))
                 today_counts = {r["keyword"]: r["count"] for r in cur.fetchall()}
 
-                cur.execute("SELECT keyword, count FROM topic_history WHERE date = ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date - INTERVAL '1 day')::text")
+                cur.execute("SELECT keyword, count FROM topic_history WHERE date = %s", (yest_str,))
                 yest_counts = {r["keyword"]: r["count"] for r in cur.fetchall()}
 
         topics = []
@@ -358,7 +365,7 @@ def update_topics():
         return jsonify({"success": True, "message": "文件模式，跳过写入"})
 
     try:
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now_str = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
         with get_conn() as conn:
             with conn.cursor() as cur:
                 for t in topics:
@@ -373,7 +380,7 @@ def update_topics():
                         t.get("keyword", ""),
                         t.get("heat", "热门"),
                         t.get("summary", ""),
-                        t.get("date", datetime.now().strftime("%Y-%m-%d")),
+                        t.get("date", datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")),
                         t.get("count", 1),
                     ))
                 for s in summaries:
@@ -409,7 +416,7 @@ def update_topics():
 # ── GET /articles ────────────────────────────────────────────
 @app.route("/articles", methods=["GET"])
 def get_articles():
-    date     = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+    date     = request.args.get("date", datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d"))
     category = request.args.get("category")
 
     if not DATABASE_URL:
@@ -449,7 +456,7 @@ def update_articles():
         return jsonify({"success": False, "error": "无法解析 JSON"}), 400
 
     articles = body.get("articles", [])
-    date     = body.get("date", datetime.now().strftime("%Y-%m-%d"))
+    date     = body.get("date", datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d"))
 
     if not DATABASE_URL:
         return jsonify({"success": True, "message": "文件模式，跳过写入"})
@@ -508,7 +515,7 @@ def stats():
                 "topic_summaries": topic_summaries_total,
                 "articles_cloud":  articles_total,
             },
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "time": datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -521,14 +528,14 @@ def health():
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cst_today = "(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date"
-                    cur.execute(f"SELECT COUNT(*) FROM papers WHERE (created_at + INTERVAL '8 hours')::date = {cst_today}")
+                    today_str = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")
+                    cur.execute("SELECT COUNT(*) FROM papers WHERE (created_at + INTERVAL '8 hours')::date = %s::date", (today_str,))
                     paper_count = cur.fetchone()[0]
-                    cur.execute(f"SELECT COUNT(*) FROM highlights WHERE (created_at + INTERVAL '8 hours')::date = {cst_today}")
+                    cur.execute("SELECT COUNT(*) FROM highlights WHERE (created_at + INTERVAL '8 hours')::date = %s::date", (today_str,))
                     highlight_count = cur.fetchone()[0]
-                    cur.execute(f"SELECT COUNT(*) FROM topic_history WHERE date = {cst_today}::text")
+                    cur.execute("SELECT COUNT(*) FROM topic_history WHERE date = %s", (today_str,))
                     topic_count = cur.fetchone()[0]
-                    cur.execute(f"SELECT COUNT(*) FROM articles_cloud WHERE (created_at + INTERVAL '8 hours')::date = {cst_today}")
+                    cur.execute("SELECT COUNT(*) FROM articles_cloud WHERE (created_at + INTERVAL '8 hours')::date = %s::date", (today_str,))
                     article_count = cur.fetchone()[0]
             return jsonify({
                 "status":          "ok",
@@ -537,7 +544,7 @@ def health():
                 "highlight_count": highlight_count,
                 "topic_count":     topic_count,
                 "article_count":   article_count,
-                "time":            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "time":            datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S"),
             })
         except Exception as e:
             return jsonify({"status": "error", "error": str(e)}), 500
@@ -557,7 +564,7 @@ def health():
         "papers_file":     has_papers,
         "highlights_file": has_highlights,
         "highlight_count": highlight_count,
-        "time":            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "time":            datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S"),
     })
 
 
