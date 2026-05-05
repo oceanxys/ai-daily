@@ -537,6 +537,29 @@ def stats():
         return jsonify({"error": str(e)}), 500
 
 
+# ── GET /highlights ───────────────────────────────────────────
+@app.route("/highlights", methods=["GET"])
+def get_highlights():
+    today = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")
+
+    if not DATABASE_URL:
+        return jsonify({"highlights": [], "count": 0, "date": today})
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT title, summary, reason, arxiv_url
+                    FROM highlights
+                    WHERE created_at >= NOW() - INTERVAL '24 hours'
+                    ORDER BY id
+                """)
+                rows = [dict(r) for r in cur.fetchall()]
+        return jsonify({"highlights": rows, "count": len(rows), "date": today})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── 健康检查 ──────────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
