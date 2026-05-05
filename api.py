@@ -109,7 +109,7 @@ def get_papers():
                     cur.execute("""
                         SELECT title, authors, abstract, arxiv_url, published, categories
                         FROM papers
-                        WHERE created_at::date = CURRENT_DATE
+                        WHERE (created_at + INTERVAL '8 hours')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date
                         ORDER BY id
                     """)
                     rows = cur.fetchall()
@@ -163,7 +163,7 @@ def update_highlights():
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("DELETE FROM highlights WHERE created_at::date = CURRENT_DATE")
+                    cur.execute("DELETE FROM highlights WHERE (created_at + INTERVAL '8 hours')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date")
                     for h in highlights:
                         cur.execute("""
                             INSERT INTO highlights (title, summary, reason, arxiv_url)
@@ -211,7 +211,7 @@ def update_papers():
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("DELETE FROM papers WHERE created_at::date = CURRENT_DATE")
+                    cur.execute("DELETE FROM papers WHERE (created_at + INTERVAL '8 hours')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date")
                     for p in papers:
                         cur.execute("""
                             INSERT INTO papers (title, authors, abstract, arxiv_url, published, categories)
@@ -521,13 +521,14 @@ def health():
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) FROM papers WHERE created_at::date = CURRENT_DATE")
+                    cst_today = "(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date"
+                    cur.execute(f"SELECT COUNT(*) FROM papers WHERE (created_at + INTERVAL '8 hours')::date = {cst_today}")
                     paper_count = cur.fetchone()[0]
-                    cur.execute("SELECT COUNT(*) FROM highlights WHERE created_at::date = CURRENT_DATE")
+                    cur.execute(f"SELECT COUNT(*) FROM highlights WHERE (created_at + INTERVAL '8 hours')::date = {cst_today}")
                     highlight_count = cur.fetchone()[0]
-                    cur.execute("SELECT COUNT(*) FROM topic_history WHERE date = CURRENT_DATE::text")
+                    cur.execute(f"SELECT COUNT(*) FROM topic_history WHERE date = {cst_today}::text")
                     topic_count = cur.fetchone()[0]
-                    cur.execute("SELECT COUNT(*) FROM articles_cloud WHERE created_at::date = CURRENT_DATE")
+                    cur.execute(f"SELECT COUNT(*) FROM articles_cloud WHERE (created_at + INTERVAL '8 hours')::date = {cst_today}")
                     article_count = cur.fetchone()[0]
             return jsonify({
                 "status":          "ok",
