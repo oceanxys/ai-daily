@@ -1832,8 +1832,63 @@ def generate_highlights(papers: list) -> list:
         text = msg.content[0].text
         text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
         m = re.search(r"\[.*\]", text, re.DOTALL)
-        if m:
-            return json.loads(m.group())
+        if not m:
+            print("  ⚠ 精选论文 Claude 返回未匹配到 JSON 数组")
+            return []
+        raw = m.group()
+
+        def _clean(s: str) -> str:
+            s = re.sub(r",\s*([\]\}])", r"\1", s)         # 去除对象/数组末尾多余逗号
+            s = re.sub(r"'([^'\\]*)'\s*:", r'"\1":', s)   # 'key': → "key":
+            s = re.sub(r":\s*'([^'\\]*)'", r': "\1"', s)  # : 'value' → : "value"
+            return s
+
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            print(f"  ⚠ JSON 整体解析失败: {e}，尝试清理后重试")
+
+        try:
+            return json.loads(_clean(raw))
+        except json.JSONDecodeError as e:
+            print(f"  ⚠ 清理后仍失败: {e}，尝试逐条解析")
+
+        # 逐条解析：括号深度匹配抓出顶层 {...}，单独一条挂掉就跳过
+        objs, depth, start, in_str, esc = [], 0, -1, False, False
+        for i, ch in enumerate(raw):
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == '\\':
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+                continue
+            if ch == '{':
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    objs.append(raw[start:i+1])
+                    start = -1
+
+        parsed = []
+        for i, obj_text in enumerate(objs):
+            try:
+                parsed.append(json.loads(obj_text))
+                continue
+            except json.JSONDecodeError:
+                pass
+            try:
+                parsed.append(json.loads(_clean(obj_text)))
+            except json.JSONDecodeError as e2:
+                print(f"  ⚠ 跳过第 {i+1} 条精选论文（解析失败：{e2}）")
+        return parsed
     except Exception as e:
         print(f"  ⚠ 精选论文生成失败: {e}")
     return []
@@ -1866,7 +1921,7 @@ def generate_embeddings(articles: list, papers: list) -> list:
 
     items = []
     for a in articles:
-        aid = a.get("id") or a.get("source_id")
+        aid = a.get("link")
         if not aid:
             continue
         text = f"{a.get('chinese_title', '')} {a.get('chinese_summary', '')}".strip()
@@ -1883,7 +1938,7 @@ def generate_embeddings(articles: list, papers: list) -> list:
                 },
             })
     for p in papers:
-        pid = p.get("id") or p.get("source_id")
+        pid = p.get("arxiv_url")
         if not pid:
             continue
         text = f"{p.get('title', '')} {p.get('abstract', '')}".strip()
