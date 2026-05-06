@@ -38,7 +38,7 @@
 | `topic_history` | 每日热词记录（keyword / heat / summary / date / count，UNIQUE keyword+date）|
 | `topic_summaries` | 热词详情（keyword PK / brief / background / key_points / sources）|
 | `articles_cloud` | 每日文章摘要（title / chinese_title / chinese_summary / category / source / link UNIQUE / date）|
-| `embeddings` | 语义检索向量（source_type / source_id / content / vector(1536) / metadata，pgvector 扩展）|
+| `embeddings` | 语义检索向量（source_type / source_id TEXT / content / vector(512) / metadata，pgvector 扩展，UNIQUE source_type+source_id）|
 
 ### API 路由速查
 
@@ -53,7 +53,8 @@
 | POST | `/update_highlights` | 写入精选高亮 |
 | POST | `/update_topics` | upsert 热词和简报 |
 | POST | `/update_articles` | 写入文章摘要（ON CONFLICT DO NOTHING）|
-| POST | `/update_embeddings` | 写入向量（pgvector，1536 维）|
+| POST | `/update_embeddings` | 写入向量（pgvector，512 维）|
+| GET | `/search?query=xxx&limit=N&source_type=article\|paper\|all` | 语义搜索，返回按余弦相似度降序的结果（默认 limit=5，上限 20）|
 | GET | `/health` | 服务状态 + 各表今日计数 |
 
 ---
@@ -97,11 +98,12 @@ source ~/.zshrc && python3 fetch_news.py
    - 热词 Agent：监控 `/topics` 趋势变化并预警
 3. **前端展示**：考虑把 8 个静态 HTML 部署到 Vercel/Netlify，直接调用 Railway API 动态渲染
 
-### RAG 知识库（进行中）
+### RAG 知识库（已上线）
 
-- 已在 PostgreSQL 启用 pgvector 扩展
-- 新增 `embeddings` 表，字段：`source_type`、`source_id`、`content`、`vector(1536)`、`metadata`
-- 使用 OpenAI `text-embedding-3-small` 模型生成向量
-- `fetch_news.py` 每日运行后自动向量化文章和论文，推送到 `embeddings` 表
-- 云端新增 `POST /update_embeddings` 接口
-- 下一步：新增 `GET /search` 语义搜索接口，接入扣子 Bot
+- PostgreSQL 启用 pgvector 扩展
+- `embeddings` 表：`source_type` / `source_id TEXT` / `content` / `vector(512)` / `metadata` JSONB，`UNIQUE(source_type, source_id)`
+- 嵌入模型：**Voyage `voyage-3-lite`**（512 维，索引侧 `input_type="document"`，查询侧 `input_type="query"`）
+- `fetch_news.py` 每日运行后自动向量化当日文章和论文，文章用 `link`、论文用 `arxiv_url` 作为 `source_id`，推送到 `embeddings` 表
+- 写入接口：`POST /update_embeddings`（ON CONFLICT DO UPDATE）
+- 检索接口：`GET /search?query=xxx&limit=N&source_type=article|paper|all`，返回 `{query, count, results: [{source_type, source_id, content, metadata, similarity}]}`，按 `1 - (embedding <=> query)` 余弦相似度降序排列
+- 环境变量：`VOYAGE_API_KEY` 必须同时配置在本机 `~/.zshrc`（fetch_news.py 使用）和 Railway web service Variables（api.py /search 使用）

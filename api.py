@@ -595,7 +595,7 @@ def search():
 
     try:
         client = voyageai.Client(api_key=voyage_key)
-        result = client.embed([query], model="voyage-3-lite")
+        result = client.embed([query], model="voyage-3-lite", input_type="query")
         query_vector = result.embeddings[0]
     except Exception as e:
         return jsonify({"success": False, "error": f"向量生成失败: {e}"}), 500

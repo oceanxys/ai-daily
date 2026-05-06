@@ -1984,7 +1984,7 @@ def generate_embeddings(articles: list, papers: list) -> list:
         BATCH  = 128
         vectors = []
         for i in range(0, len(texts), BATCH):
-            result = client.embed(texts[i:i+BATCH], model="voyage-3-lite")
+            result = client.embed(texts[i:i+BATCH], model="voyage-3-lite", input_type="document")
             vectors.extend(result.embeddings)
 
         for it, vec in zip(items, vectors):
