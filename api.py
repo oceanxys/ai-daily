@@ -34,6 +34,19 @@ def init_db():
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
+                cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS embeddings (
+                        id          SERIAL PRIMARY KEY,
+                        source_type TEXT NOT NULL,
+                        source_id   INTEGER NOT NULL,
+                        content     TEXT NOT NULL,
+                        embedding   vector(1536),
+                        metadata    JSONB,
+                        created_at  TIMESTAMP DEFAULT NOW(),
+                        UNIQUE(source_type, source_id)
+                    )
+                """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS papers (
                         id          SERIAL PRIMARY KEY,
