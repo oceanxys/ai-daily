@@ -1858,6 +1858,7 @@ def push_highlights_to_cloud(highlights: list) -> None:
 
 
 def generate_embeddings(articles: list, papers: list) -> list:
+    print(f"🔢 生成 {len(articles)} 篇文章 + {len(papers)} 篇论文向量...")
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         print("  ⚠ OPENAI_API_KEY 未配置，跳过向量化")
@@ -1899,6 +1900,7 @@ def generate_embeddings(articles: list, papers: list) -> list:
             })
 
     if not items:
+        print("  ⚠ 没有可向量化的内容（articles/papers 都缺少 id/source_id 或正文为空）")
         return []
 
     try:
@@ -1926,7 +1928,9 @@ def generate_embeddings(articles: list, papers: list) -> list:
 
 def push_embeddings_to_cloud(embeddings: list) -> None:
     if not embeddings:
+        print("☁️ 没有向量可推送，跳过")
         return
+    print(f"☁️ 推送 {len(embeddings)} 个向量到云端...")
     try:
         with httpx.Client(timeout=60) as c:
             r = c.post(
@@ -1937,6 +1941,7 @@ def push_embeddings_to_cloud(embeddings: list) -> None:
             if r.status_code == 200:
                 d = r.json()
                 print(f"  ✅ 已推送 {d.get('upserted', len(embeddings))} 条向量到云端")
+                print("✅ 向量化完成")
             else:
                 print(f"  ⚠ 向量推送失败: HTTP {r.status_code} {r.text[:200]}")
     except Exception as e:
