@@ -433,28 +433,33 @@ def update_topics():
 @app.route("/articles", methods=["GET"])
 def get_articles():
     date     = request.args.get("date", datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d"))
-    category = request.args.get("category")
+    category = request.args.get("category", "").strip()
+    keyword  = request.args.get("keyword", "").strip()
 
     if not DATABASE_URL:
         return jsonify({"articles": [], "date": date})
 
     try:
+        conditions = ["date = %s"]
+        params     = [date]
+        if category:
+            conditions.append("category = %s")
+            params.append(category)
+        if keyword:
+            conditions.append(
+                "(chinese_title ILIKE %s OR chinese_summary ILIKE %s)"
+            )
+            params.extend([f"%{keyword}%", f"%{keyword}%"])
+
+        sql = f"""
+            SELECT title, chinese_title, chinese_summary, category, source, link, date
+            FROM articles_cloud
+            WHERE {" AND ".join(conditions)}
+            ORDER BY id
+        """
         with get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                if category:
-                    cur.execute("""
-                        SELECT title, chinese_title, chinese_summary, category, source, link, date
-                        FROM articles_cloud
-                        WHERE date = %s AND category = %s
-                        ORDER BY id
-                    """, (date, category))
-                else:
-                    cur.execute("""
-                        SELECT title, chinese_title, chinese_summary, category, source, link, date
-                        FROM articles_cloud
-                        WHERE date = %s
-                        ORDER BY id
-                    """, (date,))
+                cur.execute(sql, params)
                 rows = [dict(r) for r in cur.fetchall()]
         return jsonify({"articles": rows, "count": len(rows), "date": date})
     except Exception as e:
