@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras
+import voyageai
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
@@ -564,6 +565,71 @@ def update_embeddings():
                         "message": f"已写入 {upserted} 条向量"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── GET /search 语义搜索 ──────────────────────────────────────
+@app.route("/search", methods=["GET"])
+def search():
+    query = (request.args.get("query") or "").strip()
+    if not query:
+        return jsonify({"success": False, "error": "query 参数不能为空"}), 400
+
+    try:
+        limit = int(request.args.get("limit", 5))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "limit 必须是整数"}), 400
+    limit = max(1, min(limit, 20))
+
+    source_type = request.args.get("source_type", "all")
+    if source_type not in ("article", "paper", "all"):
+        return jsonify({"success": False,
+                        "error": "source_type 必须是 article / paper / all"}), 400
+
+    if not DATABASE_URL:
+        return jsonify({"success": False, "error": "DATABASE_URL 未配置"}), 503
+
+    voyage_key = os.environ.get("VOYAGE_API_KEY")
+    if not voyage_key:
+        return jsonify({"success": False,
+                        "error": "VOYAGE_API_KEY 未配置（请到 Railway Variables 添加）"}), 500
+
+    try:
+        client = voyageai.Client(api_key=voyage_key)
+        result = client.embed([query], model="voyage-3-lite")
+        query_vector = result.embeddings[0]
+    except Exception as e:
+        return jsonify({"success": False, "error": f"向量生成失败: {e}"}), 500
+
+    vec_str = str(query_vector)
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if source_type == "all":
+                    cur.execute("""
+                        SELECT source_type, source_id, content, metadata,
+                               1 - (embedding <=> %s::vector) AS similarity
+                        FROM embeddings
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                    """, (vec_str, vec_str, limit))
+                else:
+                    cur.execute("""
+                        SELECT source_type, source_id, content, metadata,
+                               1 - (embedding <=> %s::vector) AS similarity
+                        FROM embeddings
+                        WHERE source_type = %s
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                    """, (vec_str, source_type, vec_str, limit))
+                rows = cur.fetchall()
+        results = [dict(r) for r in rows]
+        for r in results:
+            if r.get("similarity") is not None:
+                r["similarity"] = round(float(r["similarity"]), 4)
+        return jsonify({"query": query, "count": len(results), "results": results})
+    except Exception as e:
+        return jsonify({"success": False, "error": f"搜索失败: {e}"}), 500
 
 
 # ── 全量统计 ──────────────────────────────────────────────────
