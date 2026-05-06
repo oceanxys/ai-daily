@@ -2,6 +2,7 @@
 """AI导航中心 - 多数据源抓取 + Claude 总结 + 多页静态生成"""
 
 import re
+import sys
 import json
 import time
 import sqlite3
@@ -35,6 +36,18 @@ JOBS_HTML_PATH      = OUTPUT_DIR / "jobs.html"
 DATA_DIR            = Path.home() / "Projects" / "ai-daily" / "data"
 HIGHLIGHTS_PATH     = DATA_DIR / "highlights.json"
 PAPERS_PATH         = DATA_DIR / "papers_today.json"
+
+# ── 日志双写工具 ──
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+    def flush(self):
+        for s in self.streams:
+            s.flush()
 
 # ── 全局运行日志 ──
 _RUN_LOG: dict = {}
@@ -2680,6 +2693,12 @@ def generate_archive_html() -> None:
 # ══════════════════════════════════════════════
 
 def main():
+    log_path = Path.home() / "Projects" / "ai-daily" / "logs" / "run.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_file = open(log_path, "a", encoding="utf-8")
+    sys.stdout = Tee(sys.stdout, log_file)
+    sys.stderr = Tee(sys.stderr, log_file)
+
     global _RUN_LOG
     t0 = time.time()
     _RUN_LOG = {
