@@ -11,6 +11,7 @@ import html as html_lib
 import os
 import httpx
 import openai
+import voyageai
 import feedparser
 import anthropic
 from typing import Optional, Union
@@ -1914,9 +1915,9 @@ def push_highlights_to_cloud(highlights: list) -> None:
 
 def generate_embeddings(articles: list, papers: list) -> list:
     print(f"🔢 生成 {len(articles)} 篇文章 + {len(papers)} 篇论文向量...")
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("VOYAGE_API_KEY")
     if not api_key:
-        print("  ⚠ OPENAI_API_KEY 未配置，跳过向量化")
+        print("  ⚠ VOYAGE_API_KEY 未配置，跳过向量化")
         return []
 
     items = []
@@ -1959,17 +1960,14 @@ def generate_embeddings(articles: list, papers: list) -> list:
         return []
 
     try:
-        client = openai.OpenAI(api_key=api_key)
+        client = voyageai.Client(api_key=api_key)
         texts  = [it["content"] for it in items]
-        # OpenAI 最多 2048 条/次，按批处理
-        BATCH  = 500
+        # voyage-3-lite 单次最多 128 条，按批处理
+        BATCH  = 128
         vectors = []
         for i in range(0, len(texts), BATCH):
-            resp = client.embeddings.create(
-                model="text-embedding-3-small",
-                input=texts[i:i+BATCH],
-            )
-            vectors.extend([d.embedding for d in resp.data])
+            result = client.embed(texts[i:i+BATCH], model="voyage-3-lite")
+            vectors.extend(result.embeddings)
 
         for it, vec in zip(items, vectors):
             it["embedding"] = vec

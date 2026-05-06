@@ -39,9 +39,9 @@ def init_db():
                     CREATE TABLE IF NOT EXISTS embeddings (
                         id          SERIAL PRIMARY KEY,
                         source_type TEXT NOT NULL,
-                        source_id   INTEGER NOT NULL,
+                        source_id   TEXT NOT NULL,
                         content     TEXT NOT NULL,
-                        embedding   vector(1536),
+                        embedding   vector(512),
                         metadata    JSONB,
                         created_at  TIMESTAMP DEFAULT NOW(),
                         UNIQUE(source_type, source_id)
