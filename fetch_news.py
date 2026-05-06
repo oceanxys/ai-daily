@@ -500,10 +500,28 @@ def _claude_json(prompt: str, max_tokens: int = 3000) -> Optional[Union[dict, li
         text = msg.content[0].text
         text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "")
         m = re.search(r"\{.*\}", text, re.DOTALL)
-        if m:
-            return json.loads(m.group())
+        if not m:
+            return None
+        raw = m.group()
+
+        def _clean(s: str) -> str:
+            s = re.sub(r",\s*([\]\}])", r"\1", s)         # 去除对象/数组末尾多余逗号
+            s = re.sub(r"'([^'\\]*)'\s*:", r'"\1":', s)   # 'key': → "key":
+            s = re.sub(r":\s*'([^'\\]*)'", r': "\1"', s)  # : 'value' → : "value"
+            return s
+
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            print(f"  ⚠ Claude JSON 整体解析失败: {e}，尝试清理后重试")
+
+        try:
+            return json.loads(_clean(raw))
+        except json.JSONDecodeError as e:
+            print(f"  ⚠ Claude JSON 清理后仍失败: {e}")
+            return None
     except Exception as e:
-        print(f"  ⚠ Claude JSON 解析失败: {e}")
+        print(f"  ⚠ Claude API 调用失败: {e}")
     return None
 
 
