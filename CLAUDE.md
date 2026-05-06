@@ -10,7 +10,7 @@
 
 | 文件 / 目录 | 作用 |
 |---|---|
-| `fetch_news.py` | 主流程：抓取 → Claude 总结 → 生成页面 → 推送云端 |
+| `fetch_news.py` | 主流程：抓取 → Claude 总结 → 生成精选高亮 → 向量化 → 生成页面 → 推送云端（启动时自动 tee stdout/stderr 到 `logs/run.log`，含 `Tee` 类、`generate_highlights`、`push_highlights_to_cloud`、`generate_embeddings`、`push_embeddings_to_cloud`）|
 | `brain.py` | Agent 大脑：sense / think / act / reflect 四阶段决策循环 |
 | `api.py` | Flask REST API（本地端口 5001 / Railway 云端），管理所有数据读写 |
 | `run.sh` | 启动 api.py 后台进程，再运行 fetch_news.py，日志写 logs/run.log |
@@ -38,19 +38,22 @@
 | `topic_history` | 每日热词记录（keyword / heat / summary / date / count，UNIQUE keyword+date）|
 | `topic_summaries` | 热词详情（keyword PK / brief / background / key_points / sources）|
 | `articles_cloud` | 每日文章摘要（title / chinese_title / chinese_summary / category / source / link UNIQUE / date）|
+| `embeddings` | 语义检索向量（source_type / source_id / content / vector(1536) / metadata，pgvector 扩展）|
 
 ### API 路由速查
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/papers` | 今日论文列表 |
+| GET | `/papers?limit=N&category=xxx` | 今日论文列表，支持 `limit` 限制返回条数、`category` 按 arXiv 分类过滤 |
+| GET | `/highlights` | 最近 24 小时精选论文高亮 |
 | GET | `/topics?range=today\|week\|month` | 热词榜，含 trend 标签 |
 | GET | `/topic/<keyword>` | 热词详情 + 30 天历史 |
-| GET | `/articles?date=YYYY-MM-DD&category=xxx` | 指定日期文章列表 |
+| GET | `/articles?date=YYYY-MM-DD&category=xxx&keyword=xxx` | 指定日期文章列表，`keyword` 在中文标题/摘要做 ILIKE 全文搜索 |
 | POST | `/update_papers` | 写入论文 |
 | POST | `/update_highlights` | 写入精选高亮 |
 | POST | `/update_topics` | upsert 热词和简报 |
 | POST | `/update_articles` | 写入文章摘要（ON CONFLICT DO NOTHING）|
+| POST | `/update_embeddings` | 写入向量（pgvector，1536 维）|
 | GET | `/health` | 服务状态 + 各表今日计数 |
 
 ---
@@ -93,3 +96,12 @@ source ~/.zshrc && python3 fetch_news.py
    - 论文 Agent：跟踪 `/papers` 和 `/highlights`
    - 热词 Agent：监控 `/topics` 趋势变化并预警
 3. **前端展示**：考虑把 8 个静态 HTML 部署到 Vercel/Netlify，直接调用 Railway API 动态渲染
+
+### RAG 知识库（进行中）
+
+- 已在 PostgreSQL 启用 pgvector 扩展
+- 新增 `embeddings` 表，字段：`source_type`、`source_id`、`content`、`vector(1536)`、`metadata`
+- 使用 OpenAI `text-embedding-3-small` 模型生成向量
+- `fetch_news.py` 每日运行后自动向量化文章和论文，推送到 `embeddings` 表
+- 云端新增 `POST /update_embeddings` 接口
+- 下一步：新增 `GET /search` 语义搜索接口，接入扣子 Bot
