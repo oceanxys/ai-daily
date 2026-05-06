@@ -523,6 +523,49 @@ def update_articles():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ── POST /update_embeddings ───────────────────────────────────
+@app.route("/update_embeddings", methods=["POST"])
+def update_embeddings():
+    if not request.is_json:
+        return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400
+
+    body = request.get_json(silent=True)
+    if body is None:
+        return jsonify({"success": False, "error": "无法解析 JSON"}), 400
+
+    embeddings = body if isinstance(body, list) else body.get("embeddings", [])
+
+    if not DATABASE_URL:
+        return jsonify({"success": True, "message": "文件模式，跳过写入"})
+
+    try:
+        upserted = 0
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for e in embeddings:
+                    cur.execute("""
+                        INSERT INTO embeddings
+                            (source_type, source_id, content, embedding, metadata)
+                        VALUES (%s, %s, %s, %s::vector, %s)
+                        ON CONFLICT (source_type, source_id) DO UPDATE SET
+                            content   = EXCLUDED.content,
+                            embedding = EXCLUDED.embedding,
+                            metadata  = EXCLUDED.metadata
+                    """, (
+                        e.get("source_type"),
+                        e.get("source_id"),
+                        e.get("content", ""),
+                        str(e.get("embedding", [])),
+                        json.dumps(e.get("metadata", {}), ensure_ascii=False),
+                    ))
+                    upserted += 1
+            conn.commit()
+        return jsonify({"success": True, "upserted": upserted,
+                        "message": f"已写入 {upserted} 条向量"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # ── 全量统计 ──────────────────────────────────────────────────
 @app.route("/stats", methods=["GET"])
 def stats():

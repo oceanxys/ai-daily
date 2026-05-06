@@ -7,7 +7,9 @@ import time
 import sqlite3
 import difflib
 import html as html_lib
+import os
 import httpx
+import openai
 import feedparser
 import anthropic
 from typing import Optional, Union
@@ -1842,6 +1844,92 @@ def push_highlights_to_cloud(highlights: list) -> None:
         print(f"  ⚠ 精选论文推送到云端失败: {e}")
 
 
+def generate_embeddings(articles: list, papers: list) -> list:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("  ⚠ OPENAI_API_KEY 未配置，跳过向量化")
+        return []
+
+    items = []
+    for a in articles:
+        aid = a.get("id") or a.get("source_id")
+        if not aid:
+            continue
+        text = f"{a.get('chinese_title', '')} {a.get('chinese_summary', '')}".strip()
+        if text:
+            items.append({
+                "source_type": "article",
+                "source_id":   aid,
+                "content":     text,
+                "metadata":    {
+                    "title":    a.get("chinese_title", ""),
+                    "date":     a.get("date", ""),
+                    "category": a.get("category", ""),
+                    "link":     a.get("link", ""),
+                },
+            })
+    for p in papers:
+        pid = p.get("id") or p.get("source_id")
+        if not pid:
+            continue
+        text = f"{p.get('title', '')} {p.get('abstract', '')}".strip()
+        if text:
+            items.append({
+                "source_type": "paper",
+                "source_id":   pid,
+                "content":     text,
+                "metadata":    {
+                    "title":      p.get("title", ""),
+                    "arxiv_url":  p.get("arxiv_url", ""),
+                    "categories": p.get("categories", []),
+                },
+            })
+
+    if not items:
+        return []
+
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        texts  = [it["content"] for it in items]
+        # OpenAI 最多 2048 条/次，按批处理
+        BATCH  = 500
+        vectors = []
+        for i in range(0, len(texts), BATCH):
+            resp = client.embeddings.create(
+                model="text-embedding-3-small",
+                input=texts[i:i+BATCH],
+            )
+            vectors.extend([d.embedding for d in resp.data])
+
+        for it, vec in zip(items, vectors):
+            it["embedding"] = vec
+
+        print(f"  ✅ 生成 {len(items)} 条向量（{len([x for x in items if x['source_type']=='article'])} 篇文章 + {len([x for x in items if x['source_type']=='paper'])} 篇论文）")
+        return items
+    except Exception as e:
+        print(f"  ⚠ 向量生成失败: {e}")
+        return []
+
+
+def push_embeddings_to_cloud(embeddings: list) -> None:
+    if not embeddings:
+        return
+    try:
+        with httpx.Client(timeout=60) as c:
+            r = c.post(
+                f"{CLOUD_BASE}/update_embeddings",
+                json=embeddings,
+                headers={"Content-Type": "application/json"},
+            )
+            if r.status_code == 200:
+                d = r.json()
+                print(f"  ✅ 已推送 {d.get('upserted', len(embeddings))} 条向量到云端")
+            else:
+                print(f"  ⚠ 向量推送失败: HTTP {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"  ⚠ 向量推送到云端失败: {e}")
+
+
 def generate_trending_html(data: dict, topic_summaries: list = None) -> None:
     now = datetime.now()
     keywords  = data.get("keywords", [])
@@ -2664,6 +2752,10 @@ def main():
     print("\n🧠 [3.6] 记忆写入")
     save_articles_to_db(summaries)
     push_articles_to_cloud(summaries)
+
+    print("\n🔢 [3.7] 向量化")
+    embeddings = generate_embeddings(summaries, _papers_for_highlights)
+    push_embeddings_to_cloud(embeddings)
     update_topics_db(focus)
     weights = update_preferences_db(summaries)
     persistent_topics = get_persistent_topics(min_days=3)
