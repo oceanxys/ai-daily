@@ -54,7 +54,7 @@ def init_db():
                         title       TEXT,
                         authors     TEXT,
                         abstract    TEXT,
-                        arxiv_url   TEXT,
+                        arxiv_url   TEXT UNIQUE,
                         published   TEXT,
                         categories  TEXT,
                         created_at  TIMESTAMP DEFAULT NOW()
@@ -248,6 +248,7 @@ def update_papers():
                         cur.execute("""
                             INSERT INTO papers (title, authors, abstract, arxiv_url, published, categories)
                             VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (arxiv_url) DO NOTHING
                         """, (
                             p.get("title", ""),
                             json.dumps(p.get("authors", []), ensure_ascii=False),
