@@ -627,6 +627,11 @@ def search():
         for r in results:
             if r.get("similarity") is not None:
                 r["similarity"] = round(float(r["similarity"]), 4)
+            if r.get("source_type") == "paper":
+                meta = r.get("metadata") or {}
+                if not meta.get("link"):
+                    meta["link"] = r.get("source_id")
+                r["metadata"] = meta
         return jsonify({"query": query, "count": len(results), "results": results})
     except Exception as e:
         return jsonify({"success": False, "error": f"搜索失败: {e}"}), 500
