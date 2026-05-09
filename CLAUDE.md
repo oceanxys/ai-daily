@@ -107,3 +107,14 @@ source ~/.zshrc && python3 fetch_news.py
 - 写入接口：`POST /update_embeddings`（ON CONFLICT DO UPDATE）
 - 检索接口：`GET /search?query=xxx&limit=N&source_type=article|paper|all`，返回 `{query, count, results: [{source_type, source_id, content, metadata, similarity}]}`，按 `1 - (embedding <=> query)` 余弦相似度降序排列
 - 环境变量：`VOYAGE_API_KEY` 必须同时配置在本机 `~/.zshrc`（fetch_news.py 使用）和 Railway web service Variables（api.py /search 使用）
+
+---
+
+## Skill 使用规范
+
+- Debug 数据抓取、日志、API、定时任务问题时，使用 `/investigate`
+- 修改 `fetch_news.py`、`api.py`、数据库、Railway API 前，先使用 `/plan-eng-review`
+- 完成代码改动后，使用 `/review` 检查 API 契约、数据写入、LLM 可信边界
+- 页面改动后，使用 `/qa` 或 `/browse` 验证本地 `output/` 页面
+- 大功能完成后，使用 `/document-release` 更新 `CLAUDE.md`
+- 涉及 API key、CORS、Railway、POST 接口时，使用 `/cso`
