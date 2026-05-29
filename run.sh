@@ -12,6 +12,14 @@ source "$HOME/.zshrc" 2>/dev/null || true
 
 cd "$HOME/Projects/ai-daily" || exit 1
 
+# ── 激活项目 venv（隔离依赖，避免 brew Python 升级导致 ModuleNotFoundError）──
+if [ -f ".venv/bin/activate" ]; then
+  source .venv/bin/activate
+else
+  echo "⚠  .venv 不存在，请先：/usr/bin/python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+  exit 1
+fi
+
 # ── 启动 api.py（如果未在运行）──
 if lsof -ti :5001 > /dev/null 2>&1; then
   echo "ℹ  api.py 已在运行，跳过启动" | tee -a "$API_LOG"

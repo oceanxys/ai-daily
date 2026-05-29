@@ -5,6 +5,8 @@ __pycache__/
 *.pyd
 .Python
 *.egg-info/
+.venv/
+venv/
 
 # 环境变量
 .env
