@@ -157,6 +157,38 @@
 
 ---
 
+## 2026-05-29
+
+### 写路由 Bearer token 鉴权部署上线
+
+5 个 `/update_*` 路由代码层鉴权早在 `f166ea2` 完成，本次补上配置端部署 + 端到端验证。
+
+**配置**
+
+- 生成 43 字符随机 token：`python3 -c "import secrets; print(secrets.token_urlsafe(32))"`
+- 本机 `~/.zshrc` 加 `export API_WRITE_TOKEN='...'`
+- Railway zooming-education → web service Variables 配置同一值，触发 redeploy
+- 双向一致性验证：`diff <(echo -n "$API_WRITE_TOKEN") <(pbpaste)` 无输出，确认两边字节级相同
+
+**端到端鉴权三连测试（目标 `POST /update_embeddings`，body `[]` 不污染数据）**
+
+| 场景 | 期望 | 实际 |
+|---|---|---|
+| 无 Authorization 头 | 401 | ✅ 401 + "无效或缺失的 Bearer token" |
+| 错误 Bearer token | 401 | ✅ 401 |
+| 正确 Bearer token | 200 | ✅ 200, upserted=0 |
+| 读路由 `/search` 无 token | 200 | ✅ 200，正常返回向量检索结果 |
+
+**launchd 兼容性验证**
+
+`/bin/bash -c 'source ~/.zshrc 2>/dev/null; python3 -c "import os; print(len(os.environ.get(\"API_WRITE_TOKEN\",\"\")))"'` 模拟 launchd 启动环境（不走交互式 shell），确认 fetch_news.py 在 22:00 自动跑时能正确加载 token，长度 43。
+
+### GitHub PAT 轮换
+
+`.git/config` remote URL 和 `~/.zshrc` `GITHUB_TOKEN` 原先都明文嵌 classic PAT（`ghp_*`）。撤销旧 PAT，新建 fine-grained PAT 替换两处。
+
+---
+
 ## 待办 / 已知问题
 
 - [ ] Railway 部署时需在 web 服务 Variables 里手动设置 `DATABASE_URL`
