@@ -49,11 +49,11 @@
 | GET | `/topics?range=today\|week\|month` | 热词榜，含 trend 标签 |
 | GET | `/topic/<keyword>` | 热词详情 + 30 天历史 |
 | GET | `/articles?date=YYYY-MM-DD&category=xxx&keyword=xxx` | 指定日期文章列表，`keyword` 在中文标题/摘要做 ILIKE 全文搜索 |
-| POST | `/update_papers` | 写入论文 |
-| POST | `/update_highlights` | 写入精选高亮 |
-| POST | `/update_topics` | upsert 热词和简报 |
-| POST | `/update_articles` | 写入文章摘要（ON CONFLICT DO NOTHING）|
-| POST | `/update_embeddings` | 写入向量（pgvector，512 维）|
+| POST | 🔒 `/update_papers` | 写入论文（需 Bearer token）|
+| POST | 🔒 `/update_highlights` | 写入精选高亮（需 Bearer token）|
+| POST | 🔒 `/update_topics` | upsert 热词和简报（需 Bearer token）|
+| POST | 🔒 `/update_articles` | 写入文章摘要（ON CONFLICT DO NOTHING，需 Bearer token）|
+| POST | 🔒 `/update_embeddings` | 写入向量（pgvector，512 维，需 Bearer token）|
 | GET | `/search?query=xxx&limit=N&source_type=article\|paper\|all` | 语义搜索，返回按余弦相似度降序的结果（默认 limit=5，上限 20）|
 | GET | `/health` | 服务状态 + 各表今日计数 |
 
@@ -86,6 +86,21 @@ source ~/.zshrc && python3 fetch_news.py
 ### 常量管理
 
 云端 API 地址统一用 `fetch_news.py` 顶部定义的 `CLOUD_BASE` 常量，不要在函数里硬编码。
+
+### API 鉴权（写路由）
+
+5 个 `/update_*` 写路由必须带 `Authorization: Bearer <token>`，token 从环境变量 `API_WRITE_TOKEN` 读取。
+
+| 环境 | 配置位置 |
+|---|---|
+| 本机 fetch_news.py | `~/.zshrc` 加 `export API_WRITE_TOKEN='...'` |
+| Railway api.py | web service Variables 加 `API_WRITE_TOKEN=...` |
+
+降级行为：`API_WRITE_TOKEN` 未配置时，写路由返回 503「未配置」（不阻塞 api 启动，避免部署期硬挂）；读路由（`/papers` `/topics` `/articles` `/search` `/highlights` `/stats` `/health`）不受影响。
+
+CORS：写路由禁止任何跨域 origin，读路由保持 `*`。
+
+生成新 token：`python3 -c "import secrets; print(secrets.token_urlsafe(32))"`，两处同步替换即可滚动。
 
 ---
 

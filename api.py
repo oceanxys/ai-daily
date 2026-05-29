@@ -4,6 +4,7 @@
 import json
 import os
 from datetime import datetime, timedelta
+from functools import wraps
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -14,13 +15,36 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+# 读路由保持全开（扣子 Bot 等后端→后端调用兼容）；
+# 写路由（/update_*）禁止任何跨域 origin，且必须 Bearer token。
+CORS(app, resources={
+    r"/update_*": {"origins": []},
+    r"/*":        {"origins": "*"},
+})
 
 SHANGHAI_TZ     = ZoneInfo("Asia/Shanghai")
 DATA_DIR        = Path.home() / "Projects" / "ai-daily" / "data"
 PAPERS_PATH     = DATA_DIR / "papers_today.json"
 HIGHLIGHTS_PATH = DATA_DIR / "highlights.json"
 DATABASE_URL    = os.environ.get("DATABASE_URL")
+API_WRITE_TOKEN = os.environ.get("API_WRITE_TOKEN")
+
+
+def require_write_token(f):
+    """写路由统一鉴权装饰器。
+
+    - API_WRITE_TOKEN 未配置：503（降级，避免部署期硬挂）
+    - 缺/错 Bearer token：401
+    """
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not API_WRITE_TOKEN:
+            return jsonify({"success": False, "error": "API_WRITE_TOKEN 未配置"}), 503
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {API_WRITE_TOKEN}":
+            return jsonify({"success": False, "error": "无效或缺失的 Bearer token"}), 401
+        return f(*args, **kwargs)
+    return wrapper
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -176,6 +200,7 @@ def get_papers():
 
 # ── POST /update_highlights ───────────────────────────────────
 @app.route("/update_highlights", methods=["POST"])
+@require_write_token
 def update_highlights():
     if not request.is_json:
         return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400
@@ -229,6 +254,7 @@ def update_highlights():
 
 # ── POST /update_papers ──────────────────────────────────────
 @app.route("/update_papers", methods=["POST"])
+@require_write_token
 def update_papers():
     if not request.is_json:
         return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400
@@ -381,6 +407,7 @@ def get_topic(keyword):
 
 # ── POST /update_topics ───────────────────────────────────────
 @app.route("/update_topics", methods=["POST"])
+@require_write_token
 def update_topics():
     if not request.is_json:
         return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400
@@ -483,6 +510,7 @@ def get_articles():
 
 # ── POST /update_articles ─────────────────────────────────────
 @app.route("/update_articles", methods=["POST"])
+@require_write_token
 def update_articles():
     if not request.is_json:
         return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400
@@ -527,6 +555,7 @@ def update_articles():
 
 # ── POST /update_embeddings ───────────────────────────────────
 @app.route("/update_embeddings", methods=["POST"])
+@require_write_token
 def update_embeddings():
     if not request.is_json:
         return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400

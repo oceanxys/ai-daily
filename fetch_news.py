@@ -37,6 +37,11 @@ DATA_DIR            = Path.home() / "Projects" / "ai-daily" / "data"
 HIGHLIGHTS_PATH     = DATA_DIR / "highlights.json"
 PAPERS_PATH         = DATA_DIR / "papers_today.json"
 
+# ── 云端 API 配置 ──
+CLOUD_BASE      = "https://web-production-6e883.up.railway.app"
+API_WRITE_TOKEN = os.environ.get("API_WRITE_TOKEN", "")
+_AUTH_HEADERS   = {"Authorization": f"Bearer {API_WRITE_TOKEN}"} if API_WRITE_TOKEN else {}
+
 # ── 日志双写工具 ──
 class Tee:
     def __init__(self, *streams):
@@ -438,10 +443,9 @@ def save_arxiv_papers() -> int:
     print(f"  ✅ 已保存 {len(papers)} 篇论文到 papers_today.json")
 
     # 推送到云端 API
-    cloud_url = "https://web-production-6e883.up.railway.app/update_papers"
     try:
         with httpx.Client(timeout=30) as client:
-            resp = client.post(cloud_url, json=payload)
+            resp = client.post(f"{CLOUD_BASE}/update_papers", json=payload, headers=_AUTH_HEADERS)
             if resp.status_code == 200:
                 print(f"  ✅ 已推送到云端 API（{resp.json().get('count', len(papers))} 篇）")
             else:
@@ -847,7 +851,7 @@ def push_articles_to_cloud(summaries: list[dict]) -> None:
             r = c.post(
                 f"{CLOUD_BASE}/update_articles",
                 json={"articles": articles, "date": today},
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **_AUTH_HEADERS},
             )
             if r.status_code == 200:
                 d = r.json()
@@ -1693,8 +1697,6 @@ post_id 填对应帖子的 ID 数字（字符串形式），不要填 URL。"""
     return result or {}
 
 
-CLOUD_BASE = "https://web-production-6e883.up.railway.app"
-
 TRENDING_CSS = """
 .tab-bar{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:1.5rem}
 .tab-btn{background:none;border:none;padding:.6rem 1.4rem;font-size:.88rem;font-weight:600;
@@ -1801,7 +1803,7 @@ def push_topics_to_cloud(keywords: list, summaries: list) -> None:
             r = c.post(
                 f"{CLOUD_BASE}/update_topics",
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **_AUTH_HEADERS},
             )
             if r.status_code == 200:
                 d = r.json()
@@ -1920,7 +1922,7 @@ def push_highlights_to_cloud(highlights: list) -> None:
             r = c.post(
                 f"{CLOUD_BASE}/update_highlights",
                 json=highlights,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **_AUTH_HEADERS},
             )
             if r.status_code == 200:
                 print(f"  ✅ 已推送 {len(highlights)} 篇精选论文到云端")
@@ -2006,7 +2008,7 @@ def push_embeddings_to_cloud(embeddings: list) -> None:
             r = c.post(
                 f"{CLOUD_BASE}/update_embeddings",
                 json=embeddings,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **_AUTH_HEADERS},
             )
             if r.status_code == 200:
                 d = r.json()
