@@ -189,6 +189,40 @@
 
 ---
 
+## 2026-05-31
+
+### launchd 实际跑修复两个隐藏 bug
+
+5/29 上次提交后以为收工，5/31 晚检查 launchd 实际运行情况，发现 `runs = 32` 但 `last exit code = 2`，run.log 自 5/29 17:52 后从未更新过——**自动任务 5/29 和 5/30 两晚都没真正跑**。深入排查后发现两个 bug：
+
+**Bug 1：run.sh 在 launchd 环境下静默早死**
+
+根因：`set -e` + `source "$HOME/.zshrc"` 的经典坑。`.zshrc` 含 zsh 专属语法（如 bun completion 用了 `(N)` glob qualifier），bash 解析 sourced 文件遇到 syntax error 返回非零，**`set -e` 直接让父进程 exit 2，`|| true` 都接不住**。
+
+修复 `run.sh`：把 source 包在临时关闭 errexit 的块里。
+
+```bash
+set +e
+source "$HOME/.zshrc" 2>/dev/null
+set -e
+```
+
+**Bug 2：修复 Bug 1 后，fetch_news.py 推送全部 HTTP 401**
+
+run.sh 修好之后 fetch_news.py 终于完整跑通，但推送阶段（文章 / 向量 / 热词）**全部 401**。
+
+根因：本机 `~/.zshrc` 有**两条 `export API_WRITE_TOKEN=...`**，token 值不同，后一行覆盖前一行。最终 source 出来的 token 与 Railway 上配置的 token 不一致，导致鉴权失败。
+
+修复：删除 `~/.zshrc` 中错误的那一条 export，保留与 Railway 一致的那一条。
+
+**端到端验证**
+
+模拟 launchd 极简环境（`env -i HOME=$HOME PATH=/usr/bin:/bin bash -c 'source ~/.zshrc; curl ...'`）确认：
+- source 后 `API_WRITE_TOKEN` 正确加载
+- `POST /update_embeddings` 返回 `HTTP 200, upserted=0`
+
+---
+
 ## 待办 / 已知问题
 
 - [ ] Railway 部署时需在 web 服务 Variables 里手动设置 `DATABASE_URL`

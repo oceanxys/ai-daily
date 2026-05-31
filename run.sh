@@ -8,7 +8,11 @@ API_LOG="$LOG_DIR/api.log"
 mkdir -p "$LOG_DIR"
 
 # ── 加载环境变量 ──
-source "$HOME/.zshrc" 2>/dev/null || true
+# set -e + source 含 zsh 语法的 .zshrc 会让 bash 直接 exit 2（|| true 接不住）
+# 必须临时关闭 errexit
+set +e
+source "$HOME/.zshrc" 2>/dev/null
+set -e
 
 cd "$HOME/Projects/ai-daily" || exit 1
 
