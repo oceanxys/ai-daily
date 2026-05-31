@@ -1,0 +1,1402 @@
+"""HTML 渲染：所有 8 个静态页面 + 共享 CSS + 子组件块。"""
+
+import json
+from datetime import datetime
+from typing import Optional
+
+from ai_daily.common import (
+    OUTPUT_DIR,
+    OUTPUT_PATH,
+    ARCHIVE_HTML_PATH,
+    INDEX_HTML_PATH,
+    MODELS_HTML_PATH,
+    TRENDING_HTML_PATH,
+    BENCHMARK_HTML_PATH,
+    TOOLS_HTML_PATH,
+    JOBS_HTML_PATH,
+    ARCHIVE_DIR,
+    HIGHLIGHTS_PATH,
+    CLOUD_BASE,
+)
+from ai_daily.memory import get_memory_stats
+
+
+# ── 导航 ──
+NAV_PAGES = [
+    ("🏠", "首页",     "index.html"),
+    ("📊", "模型追踪", "models.html"),
+    ("🔥", "热词榜",   "trending.html"),
+    ("📈", "竞技场",   "benchmark.html"),
+    ("🧰", "工具库",   "tools.html"),
+    ("💼", "求职动态", "jobs.html"),
+    ("📰", "今日日报", "today.html"),
+    ("📚", "历史归档", "archive.html"),
+]
+
+# ── 共享 CSS（所有页面通用）──
+SHARED_CSS = """
+:root{
+  --bg0:#0d1117;--bg1:#161b22;--bg2:#1c2128;--bg3:#21262d;
+  --border:#30363d;
+  --t1:#e6edf3;--t2:#8b949e;--t3:#6e7681;
+  --blue:#58a6ff;--green:#3fb950;--purple:#bc8cff;
+  --orange:#f0883e;--red:#ff7b72;--yellow:#f0c040;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg0);color:var(--t1);line-height:1.65;min-height:100vh}
+.hdr{background:var(--bg1);border-bottom:1px solid var(--border);
+  position:sticky;top:0;z-index:50;backdrop-filter:blur(8px)}
+.hdr-inner{max-width:1300px;margin:0 auto;padding:.65rem 1.5rem;
+  display:flex;align-items:center;gap:.6rem}
+.brand{display:flex;align-items:center;gap:.55rem;text-decoration:none;flex-shrink:0}
+.brand-icon{width:30px;height:30px;border-radius:7px;
+  background:linear-gradient(135deg,var(--blue),var(--purple));
+  display:flex;align-items:center;justify-content:center;font-size:.95rem}
+.brand-name{font-size:.95rem;font-weight:700;
+  background:linear-gradient(135deg,var(--blue),var(--purple));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.nav{display:flex;align-items:center;gap:.1rem;flex-wrap:wrap;margin-left:auto}
+.nav-item{padding:.25rem .58rem;border-radius:6px;color:var(--t2);
+  text-decoration:none;font-size:.76rem;transition:all .15s;white-space:nowrap}
+.nav-item:hover{background:var(--bg3);color:var(--t1)}
+.nav-active{background:rgba(88,166,255,.12);color:var(--blue)}
+.main{max-width:1300px;margin:0 auto;padding:2rem}
+.ftr{text-align:center;padding:2rem;color:var(--t3);
+  font-size:.74rem;border-top:1px solid var(--border);margin-top:2rem}
+.ftr a{color:var(--blue);text-decoration:none}
+.section{margin-bottom:2.5rem}
+.section-hdr{display:flex;align-items:center;gap:.6rem;
+  padding-bottom:.7rem;margin-bottom:1.25rem;
+  border-bottom:2px solid var(--cat-color,var(--blue))}
+.section-icon{font-size:1.15rem;line-height:1}
+.section-title{font-size:.98rem;font-weight:700;color:var(--cat-color,var(--blue))}
+.section-count{margin-left:auto;padding:.1rem .5rem;
+  background:rgba(255,255,255,.06);border:1px solid var(--border);
+  border-radius:20px;font-size:.7rem;color:var(--t2)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1.2rem}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+  padding:1.2rem;display:flex;flex-direction:column;gap:.75rem;transition:all .18s ease}
+.card:hover{background:var(--bg3);border-color:var(--blue);
+  transform:translateY(-2px);box-shadow:0 8px 24px rgba(88,166,255,.1)}
+.badge{padding:.2rem .62rem;background:rgba(88,166,255,.12);
+  color:var(--blue);border:1px solid rgba(88,166,255,.2);
+  border-radius:20px;font-size:.7rem;font-weight:600}
+.stats{display:flex;align-items:center;gap:1.2rem;flex-wrap:wrap;
+  background:var(--bg1);border:1px solid var(--border);border-radius:10px;
+  padding:.8rem 1.3rem;margin-bottom:2rem;font-size:.83rem;color:var(--t2)}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(.8)}}
+.stats strong{color:var(--t1)}
+.dot-sep{color:var(--border)}
+.no-data{text-align:center;padding:4rem;color:var(--t3);font-size:1rem}
+@media(max-width:768px){
+  .nav-item{font-size:.68rem;padding:.2rem .4rem}
+  .main{padding:1rem}
+  .grid{grid-template-columns:1fr}
+}
+"""
+
+
+def _page_shell(title: str, active_url: str, body: str, extra_css: str = "") -> str:
+    now = datetime.now()
+    date_str = now.strftime("%Y年%m月%d日")
+    nav_html = ""
+    for emoji, label, url in NAV_PAGES:
+        cls = " nav-active" if url == active_url else ""
+        nav_html += f'<a href="{url}" class="nav-item{cls}">{emoji} {label}</a>'
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} · AI 导航</title>
+<style>
+{SHARED_CSS}
+{extra_css}
+</style>
+</head>
+<body>
+<header class="hdr">
+  <div class="hdr-inner">
+    <a class="brand" href="index.html">
+      <div class="brand-icon">🤖</div>
+      <div class="brand-name">AI 导航</div>
+    </a>
+    <nav class="nav">{nav_html}</nav>
+  </div>
+</header>
+<main class="main">
+{body}
+</main>
+<footer class="ftr">
+  AI 导航中心 · Powered by <a href="https://www.anthropic.com" target="_blank">Claude</a> · {date_str}
+</footer>
+</body>
+</html>"""
+
+
+# ══════════════════════════════════════════════
+#  公共渲染辅助
+# ══════════════════════════════════════════════
+
+BRAND_COLORS = {
+    "OpenAI":    "#10a37f",
+    "Anthropic": "#cc785c",
+    "Google":    "#4285f4",
+    "Meta":      "#0866ff",
+    "xAI":       "#9e9e9e",
+    "Mistral":   "#f0883e",
+}
+
+SCORE_LABELS = [
+    ("text",       "文字理解与写作"),
+    ("code",       "代码能力"),
+    ("reasoning",  "推理与数学"),
+    ("multimodal", "多模态"),
+    ("speed_cost", "速度与性价比"),
+]
+
+CATEGORIES = [
+    ("大模型动态",   "🤖", "#58a6ff"),
+    ("AI产品与工具", "🛠️", "#3fb950"),
+    ("AI研究进展",   "🔬", "#bc8cff"),
+    ("AI商业动态",   "💰", "#f0883e"),
+    ("AI政策与监管", "🌍", "#ff7b72"),
+    ("其他",         "📌", "#8b949e"),
+]
+
+# 分类元数据索引，方便按名称查找 emoji/color
+_CAT_META = {cat: (emoji, color) for cat, emoji, color in CATEGORIES}
+
+
+def _render_tracking_block(persistent_topics: list[dict]) -> str:
+    """生成「📌 持续追踪」HTML 区块。"""
+    if not persistent_topics:
+        return ""
+    items_html = ""
+    for pt in persistent_topics:
+        tl_rows = "".join(
+            f'<div class="tl-row">'
+            f'<span class="tl-date">{ev.get("date","")}</span>'
+            f'<span class="tl-summary">{ev.get("summary","")}</span>'
+            f'</div>'
+            for ev in pt.get("timeline", [])[-5:]   # 最近 5 条
+        )
+        items_html += f"""<div class="track-item">
+  <div class="track-topic">{pt['name']}</div>
+  <div class="track-timeline">{tl_rows if tl_rows else '<div class="tl-row"><span class="tl-summary" style="color:var(--t3)">暂无时间线记录</span></div>'}</div>
+</div>"""
+    first_seen = persistent_topics[0]["first_seen"] if persistent_topics else ""
+    return f"""<div class="track-block">
+  <div class="track-hdr">
+    <span class="track-badge">📌 持续追踪</span>
+    <span class="track-title">以下话题已连续追踪多天</span>
+    <span class="track-days">最早自 {first_seen}</span>
+  </div>
+  <div class="track-items">{items_html}</div>
+</div>"""
+
+
+def _render_mem_stats_panel(stats: dict) -> str:
+    """生成 archive.html 顶部的记忆统计面板 HTML。"""
+    total_art  = stats.get("total_articles", 0)
+    total_top  = stats.get("total_topics", 0)
+    persistent = stats.get("persistent", [])
+    weekly     = stats.get("weekly", {})
+    dates      = stats.get("dates", [])
+
+    # 最近 7 天趋势迷你图（每个分类一行 bar）
+    trend_rows = ""
+    if weekly and dates:
+        max_cnt = max(
+            (cnt for d_map in weekly.values() for cnt in d_map.values()),
+            default=1,
+        ) or 1
+        for cat, d_map in list(weekly.items())[:5]:   # 最多展示5类
+            _, color = _CAT_META.get(cat, ("📌", "#8b949e"))
+            bars = ""
+            for d in dates[-7:]:
+                cnt = d_map.get(d, 0)
+                h   = max(4, round(cnt / max_cnt * 40))
+                bars += f'<div class="mini-bar" style="height:{h}px;background:{color}" title="{d}: {cnt}条"></div>'
+            trend_rows += f'<div class="trend-row"><span class="trend-cat">{cat}</span><div class="trend-bars">{bars}</div></div>'
+
+    # 持续话题标签
+    ptags = "".join(
+        f'<span class="ptag">{p["name"]} <em>{p["days"]}天</em></span>'
+        for p in persistent
+    )
+
+    return f"""<div class="mem-panel">
+  <div class="mem-stat"><span class="mem-label">总收录文章</span><span class="mem-value">{total_art}</span></div>
+  <div class="mem-stat"><span class="mem-label">追踪话题数</span><span class="mem-value">{total_top}</span></div>
+  <div class="mem-divider"></div>
+  <div class="mem-trend-wrap">
+    <div class="mem-trend-title">近7天各分类趋势</div>
+    <div class="mem-trend">{trend_rows if trend_rows else '<span style="color:var(--t3);font-size:.78rem">暂无数据</span>'}</div>
+  </div>
+  {f'<div class="mem-divider"></div><div class="mem-ptags-wrap"><div class="mem-trend-title">持续追踪话题</div><div class="mem-ptags">{ptags}</div></div>' if ptags else ''}
+</div>"""
+
+
+def _mem_panel_css() -> str:
+    return """
+/* ── 持续追踪区块 ── */
+.track-block{background:rgba(88,166,255,.06);border:1px solid rgba(88,166,255,.28);
+  border-radius:12px;padding:1.2rem 1.5rem;margin-bottom:1.5rem}
+.track-hdr{display:flex;align-items:center;gap:.7rem;margin-bottom:1rem;flex-wrap:wrap}
+.track-badge{font-size:.7rem;font-weight:700;letter-spacing:.04em;
+  padding:.2rem .65rem;background:rgba(88,166,255,.15);color:var(--blue);
+  border:1px solid rgba(88,166,255,.3);border-radius:20px;flex-shrink:0}
+.track-title{font-size:.92rem;font-weight:600;color:var(--t1)}
+.track-days{font-size:.76rem;color:var(--t3);margin-left:auto}
+.track-items{display:flex;flex-direction:column;gap:.9rem}
+.track-item{border-left:2px solid rgba(88,166,255,.3);padding-left:1rem}
+.track-topic{font-size:.88rem;font-weight:700;color:var(--blue);margin-bottom:.35rem}
+.track-timeline{display:flex;flex-direction:column;gap:.22rem}
+.tl-row{display:flex;gap:.8rem;align-items:flex-start;font-size:.78rem}
+.tl-date{color:var(--t3);flex-shrink:0;width:5.5rem}
+.tl-summary{color:var(--t2);line-height:1.5}
+
+/* ── archive 记忆统计面板 ── */
+.mem-panel{background:var(--bg1);border-bottom:1px solid var(--border);
+  padding:.85rem 1.5rem;display:flex;align-items:center;gap:2rem;flex-wrap:wrap}
+.mem-stat{display:flex;flex-direction:column;gap:.15rem;flex-shrink:0}
+.mem-label{font-size:.65rem;color:var(--t3);text-transform:uppercase;letter-spacing:.07em}
+.mem-value{font-size:1.15rem;font-weight:700;color:var(--t1)}
+.mem-divider{width:1px;height:36px;background:var(--border);flex-shrink:0}
+.mem-trend-wrap,.mem-ptags-wrap{display:flex;flex-direction:column;gap:.35rem}
+.mem-trend-title{font-size:.67rem;color:var(--t3);text-transform:uppercase;letter-spacing:.06em}
+.mem-trend{display:flex;flex-direction:column;gap:.22rem}
+.trend-row{display:flex;align-items:flex-end;gap:.5rem}
+.trend-cat{font-size:.72rem;color:var(--t2);width:7rem;text-align:right;flex-shrink:0}
+.trend-bars{display:flex;align-items:flex-end;gap:3px}
+.mini-bar{width:10px;border-radius:2px 2px 0 0;cursor:default;transition:opacity .15s}
+.mini-bar:hover{opacity:.7}
+.mem-ptags{display:flex;flex-wrap:wrap;gap:.4rem}
+.ptag{font-size:.75rem;padding:.18rem .6rem;background:rgba(88,166,255,.1);
+  color:var(--blue);border:1px solid rgba(88,166,255,.25);border-radius:20px}
+.ptag em{font-style:normal;color:var(--t3);margin-left:.25rem}
+"""
+
+
+def _format_weight_log(weights: dict) -> str:
+    """把权重字典格式化为日志字符串。"""
+    if not weights:
+        return "（无数据）"
+    lines = []
+    for cat, w in sorted(weights.items(), key=lambda x: -x[1]):
+        bar = "█" * int(w * 20)
+        lines.append(f"    {cat:<12} {w:.4f}  {bar}")
+    return "\n" + "\n".join(lines)
+
+
+def _sort_categories_by_weight(weights: dict) -> list[tuple]:
+    """根据偏好权重对 CATEGORIES 重排序（其他类固定放末尾）。"""
+    if not weights:
+        return list(CATEGORIES)
+    def sort_key(item):
+        cat = item[0]
+        if cat == "其他":
+            return -1.0
+        return weights.get(cat, 0.0)
+    return sorted(CATEGORIES, key=sort_key, reverse=True)
+
+
+def _stars(n: int, total: int = 5) -> str:
+    n = max(0, min(total, int(n or 0)))
+    return "⭐" * n + "☆" * (total - n)
+
+
+def _news_card(item: dict) -> str:
+    src      = item.get("source", "")
+    ctitle   = item.get("chinese_title", item.get("original_title", ""))
+    csummary = item.get("chinese_summary", "")
+    otitle   = item.get("original_title", "")
+    link     = item.get("link", "#")
+    short    = (otitle[:55] + "…") if len(otitle) > 55 else otitle
+    return f"""<div class="card">
+  <div class="card-top"><span class="badge">{src}</span></div>
+  <h2 class="card-title">{ctitle}</h2>
+  <p class="card-summary">{csummary}</p>
+  <div class="card-foot">
+    <span class="orig-title" title="{otitle}">{short}</span>
+    <a class="btn-read" href="{link}" target="_blank" rel="noopener">阅读原文 →</a>
+  </div>
+</div>"""
+
+
+def _render_model_accordion(model_versions: list[dict]) -> str:
+    if not model_versions:
+        return '<div class="no-data">暂无模型数据</div>'
+    items = ""
+    for idx, co_data in enumerate(model_versions):
+        company = co_data.get("company", "")
+        brand   = BRAND_COLORS.get(company, "#58a6ff")
+        models  = co_data.get("models", [])
+        mcards  = ""
+        for mdl in models:
+            feat_li  = "".join(f"<li>{f}</li>" for f in mdl.get("latest_features", []))
+            scores   = mdl.get("scores", {})
+            score_rows = "".join(
+                f'<div class="score-row"><span class="score-label">{lbl}</span>'
+                f'<span class="score-stars">{_stars(scores.get(k, 0))}</span></div>'
+                for k, lbl in SCORE_LABELS
+            )
+            mile_li  = "".join(f"<li>{ms}</li>" for ms in mdl.get("milestones", []))
+            mcards += f"""<div class="mcard">
+  <div class="mcard-name" style="border-color:{brand}">{mdl.get('name','')}</div>
+  <div class="mcard-section"><div class="mcard-section-title">📢 最新功能更新</div>
+    <ul class="feature-list">{feat_li}</ul></div>
+  <div class="mcard-section"><div class="mcard-section-title">⭐ 能力评分</div>
+    <div class="scores">{score_rows}</div></div>
+  <div class="mcard-section"><div class="mcard-section-title">📜 历史里程碑</div>
+    <ul class="milestone-list">{mile_li}</ul></div>
+</div>"""
+        open_attr = "open" if idx == 0 else ""
+        items += f"""<details class="acc-item" {open_attr}>
+  <summary class="acc-summary" style="--brand:{brand}">
+    <div class="acc-left">
+      <span class="acc-dot"></span>
+      <span class="acc-company">{company}</span>
+      <span class="acc-model-count">{len(models)} 个模型</span>
+    </div>
+    <span class="acc-chevron">›</span>
+  </summary>
+  <div class="acc-body"><div class="model-cards">{mcards}</div></div>
+</details>"""
+    return f'<div class="accordion">{items}</div>'
+
+
+MODEL_CSS = """
+.accordion{display:flex;flex-direction:column;gap:.6rem}
+.acc-item{border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:border-color .2s}
+.acc-item[open]{border-color:var(--brand)}
+.acc-summary{list-style:none;display:flex;align-items:center;justify-content:space-between;
+  padding:.9rem 1.3rem;cursor:pointer;background:var(--bg2);
+  border-left:3px solid var(--brand);user-select:none;gap:1rem}
+.acc-summary::-webkit-details-marker{display:none}
+.acc-summary:hover{background:var(--bg3)}
+.acc-left{display:flex;align-items:center;gap:.7rem}
+.acc-dot{width:10px;height:10px;border-radius:50%;background:var(--brand);flex-shrink:0}
+.acc-company{font-weight:700;font-size:1rem;color:var(--brand)}
+.acc-model-count{font-size:.72rem;color:var(--t3);background:var(--bg3);
+  border:1px solid var(--border);border-radius:20px;padding:.1rem .5rem}
+.acc-chevron{font-size:1.2rem;color:var(--t3);transition:transform .25s;flex-shrink:0}
+.acc-item[open] .acc-chevron{transform:rotate(90deg)}
+.acc-body{padding:1.1rem;background:var(--bg1)}
+.model-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:.9rem}
+.mcard{background:var(--bg2);border:1px solid var(--border);border-radius:10px;
+  padding:1rem;display:flex;flex-direction:column;gap:.85rem}
+.mcard-name{font-size:.92rem;font-weight:700;color:var(--t1);padding-bottom:.5rem;border-bottom:2px solid}
+.mcard-section{display:flex;flex-direction:column;gap:.3rem}
+.mcard-section-title{font-size:.68rem;font-weight:700;color:var(--t3);letter-spacing:.06em;text-transform:uppercase}
+.feature-list,.milestone-list{list-style:none;padding-left:.1rem;display:flex;flex-direction:column;gap:.22rem}
+.feature-list li{font-size:.8rem;color:var(--t2);padding-left:.9rem;position:relative}
+.feature-list li::before{content:'▸';position:absolute;left:0;color:var(--blue);font-size:.68rem;top:.1rem}
+.milestone-list li{font-size:.76rem;color:var(--t3);padding-left:.9rem;position:relative}
+.milestone-list li::before{content:'·';position:absolute;left:.1rem;color:var(--t3)}
+.scores{display:flex;flex-direction:column;gap:.15rem}
+.score-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
+.score-label{font-size:.76rem;color:var(--t2);flex:1}
+.score-stars{font-size:.68rem;letter-spacing:-.02em;white-space:nowrap}
+"""
+
+NEWS_CSS = """
+.card-top{display:flex;align-items:center}
+.card-title{font-size:.95rem;font-weight:600;color:var(--t1);line-height:1.5}
+.card-summary{font-size:.85rem;color:var(--t2);line-height:1.75;flex:1}
+.card-foot{display:flex;align-items:center;justify-content:space-between;gap:.65rem;
+  padding-top:.65rem;border-top:1px solid var(--border)}
+.orig-title{font-size:.7rem;color:var(--t3);flex:1;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:italic}
+.btn-read{display:inline-flex;align-items:center;white-space:nowrap;
+  padding:.28rem .72rem;border:1px solid rgba(88,166,255,.3);border-radius:6px;
+  color:var(--blue);text-decoration:none;font-size:.75rem;font-weight:500;transition:all .15s}
+.btn-read:hover{background:rgba(88,166,255,.1);border-color:var(--blue)}
+
+/* ── 警告横幅 ── */
+.warn-banner{display:flex;align-items:flex-start;gap:.6rem;
+  background:rgba(255,123,114,.07);border:1px solid rgba(255,123,114,.3);
+  border-radius:8px;padding:.75rem 1.1rem;margin-bottom:1.1rem;
+  color:var(--red);font-size:.83rem;line-height:1.55}
+.warn-icon{flex-shrink:0;font-size:1rem;margin-top:.05rem}
+
+/* ── 今日焦点区块 ── */
+.focus-block{background:linear-gradient(135deg,rgba(255,123,114,.07),rgba(240,136,62,.06));
+  border:1px solid rgba(255,123,114,.35);border-radius:12px;
+  padding:1.3rem 1.5rem;margin-bottom:2rem}
+.focus-hdr{display:flex;align-items:center;gap:.75rem;margin-bottom:.65rem}
+.focus-badge{font-size:.72rem;font-weight:700;letter-spacing:.04em;
+  padding:.2rem .65rem;background:rgba(255,123,114,.15);color:var(--red);
+  border:1px solid rgba(255,123,114,.3);border-radius:20px}
+.focus-topic{font-size:1.05rem;font-weight:700;color:var(--t1)}
+.focus-why{font-size:.84rem;color:var(--t2);margin-bottom:.9rem;line-height:1.6}
+.focus-arts{display:flex;flex-direction:column;gap:.35rem}
+.focus-art{font-size:.82rem;color:var(--t2);padding-left:1rem;position:relative}
+.focus-art::before{content:'→';position:absolute;left:0;color:var(--red)}
+.focus-art a{color:var(--t2);text-decoration:none}
+.focus-art a:hover{color:var(--blue);text-decoration:underline}
+
+/* ── 采集质量报告 ── */
+.quality-report{margin-top:3rem;background:var(--bg1);border:1px solid var(--border);
+  border-radius:10px;padding:1.1rem 1.5rem}
+.quality-title{font-size:.72rem;font-weight:700;color:var(--t3);
+  letter-spacing:.07em;text-transform:uppercase;margin-bottom:.8rem}
+.quality-grid{display:flex;gap:2.5rem;flex-wrap:wrap}
+.quality-item{display:flex;flex-direction:column;gap:.15rem}
+.quality-label{font-size:.72rem;color:var(--t3)}
+.quality-value{font-size:.92rem;font-weight:600;color:var(--t1)}
+.quality-ok{color:var(--green)}
+.quality-warn{color:var(--orange)}
+.src-list{margin-top:.9rem;border-top:1px solid var(--border);padding-top:.8rem;
+  display:flex;flex-direction:column;gap:.25rem}
+.src-item{display:flex;align-items:center;gap:.5rem;font-size:.76rem;color:var(--t3)}
+.src-ok{color:var(--green)}
+.src-fail{color:var(--red)}
+
+/* ── 精选论文区块 ── */
+.paper-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+  padding:1.2rem;display:flex;flex-direction:column;gap:.65rem;transition:all .18s}
+.paper-card:hover{background:var(--bg3);border-color:var(--purple);
+  transform:translateY(-2px);box-shadow:0 8px 24px rgba(188,140,255,.1)}
+.paper-title{font-size:.95rem;font-weight:600;color:var(--t1);line-height:1.5}
+.paper-summary{font-size:.85rem;color:var(--t2);line-height:1.7}
+.paper-reason{font-size:.8rem;color:var(--purple);padding:.35rem .7rem;
+  background:rgba(188,140,255,.08);border:1px solid rgba(188,140,255,.2);
+  border-radius:6px;line-height:1.55}
+.paper-reason::before{content:'💡 推荐理由：';font-weight:600}
+.paper-link{display:inline-flex;align-items:center;gap:.3rem;color:var(--blue);
+  text-decoration:none;font-size:.78rem;font-weight:500;
+  padding:.25rem .65rem;border:1px solid rgba(88,166,255,.3);border-radius:6px;
+  align-self:flex-start;transition:all .15s}
+.paper-link:hover{background:rgba(88,166,255,.1);border-color:var(--blue)}
+.paper-updated{font-size:.7rem;color:var(--t3);margin-left:auto}
+"""
+
+
+def _render_highlights_block(highlights: list[dict]) -> str:
+    """生成「📚 今日精选论文」HTML 区块。"""
+    if not highlights:
+        return ""
+    cards = ""
+    for p in highlights:
+        title   = p.get("title", "（无标题）")
+        summary = p.get("summary", "")
+        reason  = p.get("reason", "")
+        link    = p.get("arxiv_link", p.get("link", "#"))
+        cards += f"""<div class="paper-card">
+  <div class="paper-title">{title}</div>
+  {f'<div class="paper-summary">{summary}</div>' if summary else ''}
+  {f'<div class="paper-reason">{reason}</div>' if reason else ''}
+  <a class="paper-link" href="{link}" target="_blank" rel="noopener">📄 arxiv →</a>
+</div>"""
+
+    # 读取更新时间
+    updated_at = ""
+    if HIGHLIGHTS_PATH.exists():
+        try:
+            meta = json.loads(HIGHLIGHTS_PATH.read_text(encoding="utf-8"))
+            updated_at = meta.get("updated_at", "")
+        except Exception:
+            pass
+
+    return f"""<section class="section">
+  <div class="section-hdr" style="--cat-color:#bc8cff">
+    <span class="section-icon">📚</span>
+    <h2 class="section-title">今日精选论文</h2>
+    <span class="section-count">{len(highlights)} 篇</span>
+    {f'<span class="paper-updated">更新于 {updated_at}</span>' if updated_at else ''}
+  </div>
+  <div class="grid">{cards}</div>
+</section>"""
+
+
+# ══════════════════════════════════════════════
+#  今日日报 (today.html)
+# ══════════════════════════════════════════════
+
+_ACTION_META = {
+    "normal":         ("正常流程",   "#8b949e"),
+    "find_more":      ("补充抓取",   "#f0883e"),
+    "special_report": ("专题生成",   "#bc8cff"),
+    "topic_summary":  ("时间线整理", "#3fb950"),
+}
+
+
+def _agent_css() -> str:
+    return """
+/* ── Agent 决策区块 ── */
+.agent-block{background:rgba(88,166,255,.04);border:1px solid rgba(88,166,255,.18);
+  border-radius:12px;padding:.9rem 1.3rem;margin-bottom:1.3rem;
+  display:flex;flex-direction:column;gap:.45rem}
+.agent-hdr{display:flex;align-items:center;gap:.65rem;flex-wrap:wrap}
+.agent-icon{font-size:1rem}
+.agent-title{font-size:.72rem;font-weight:700;color:var(--t3);
+  letter-spacing:.06em;text-transform:uppercase}
+.agent-badge{font-size:.72rem;font-weight:700;padding:.15rem .55rem;
+  border-radius:20px;border:1px solid transparent}
+.agent-extra{font-size:.75rem;color:var(--orange)}
+.agent-reason{font-size:.86rem;color:var(--t2);line-height:1.6}
+.agent-targets{display:flex;flex-wrap:wrap;gap:.35rem}
+.agent-tag{font-size:.73rem;padding:.15rem .55rem;background:rgba(88,166,255,.08);
+  color:var(--blue);border:1px solid rgba(88,166,255,.2);border-radius:20px}
+.agent-result{font-size:.77rem;color:var(--t3)}
+"""
+
+
+def _render_agent_block(decision: Optional[dict]) -> str:
+    if not decision:
+        return ""
+    action  = decision.get("action", "normal")
+    reason  = decision.get("reason", "")
+    targets = decision.get("targets", [])
+    status  = decision.get("_act_status", "")
+    extra   = decision.get("_extra_articles", [])
+
+    label, color = _ACTION_META.get(action, ("未知", "#8b949e"))
+
+    targets_html = ""
+    if targets:
+        tags = "".join(f'<span class="agent-tag">{t}</span>' for t in targets)
+        targets_html = f'<div class="agent-targets">{tags}</div>'
+
+    extra_note = (
+        f'<span class="agent-extra">补充了 {len(extra)} 篇文章</span>' if extra else ""
+    )
+    result_html = (
+        f'<div class="agent-result">执行结果：{status}</div>'
+        if status and status != "normal flow" else ""
+    )
+
+    return f"""<div class="agent-block">
+  <div class="agent-hdr">
+    <span class="agent-icon">🧠</span>
+    <span class="agent-title">今日 Agent 决策</span>
+    <span class="agent-badge" style="color:{color};border-color:{color};background:{color}18">{label}</span>
+    {extra_note}
+  </div>
+  <div class="agent-reason">{reason}</div>
+  {targets_html}
+  {result_html}
+</div>"""
+
+
+def generate_today_html(
+    summaries:         list[dict],
+    warnings:          Optional[list] = None,
+    focus:             Optional[dict] = None,
+    quality_report:    Optional[dict] = None,
+    persistent_topics: Optional[list] = None,
+    filtered_count:    int = 0,
+    category_order:    Optional[list] = None,
+    highlights:        Optional[list] = None,
+    agent_decision:    Optional[dict] = None,
+) -> None:
+    now      = datetime.now()
+    date_str = now.strftime("%Y年%m月%d日")
+    weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    day_str  = weekdays[now.weekday()]
+    time_str = now.strftime("%H:%M")
+    count    = len(summaries)
+
+    cat_list = category_order if category_order else CATEGORIES
+
+    # ── 警告横幅 ──
+    warn_html = ""
+    for w in (warnings or []):
+        warn_html += f'<div class="warn-banner"><span class="warn-icon">⚠️</span>{w}</div>\n'
+
+    # ── 持续追踪区块 ──
+    tracking_html = _render_tracking_block(persistent_topics or [])
+
+    # ── 今日焦点区块 ──
+    focus_html = ""
+    if focus and focus.get("topic"):
+        art_items = "".join(
+            f'<div class="focus-art"><a href="{a.get("link","#")}" target="_blank" rel="noopener">'
+            f'{a.get("chinese_title", a.get("original_title",""))}</a></div>'
+            for a in focus.get("articles", [])[:6]
+        )
+        focus_html = f"""<div class="focus-block">
+  <div class="focus-hdr">
+    <span class="focus-badge">🔥 今日焦点</span>
+    <span class="focus-topic">{focus['topic']}</span>
+  </div>
+  <div class="focus-why">{focus.get('why', '')}</div>
+  <div class="focus-arts">{art_items}</div>
+</div>"""
+
+    # ── 新闻分类区块（按偏好权重排序）──
+    grouped = {cat: [] for cat, _, _ in CATEGORIES}
+    valid   = {cat for cat, _, _ in CATEGORIES}
+    for item in summaries:
+        cat = item.get("category", "其他")
+        if cat not in valid:
+            cat = "其他"
+        grouped[cat].append(item)
+
+    sections = ""
+    if not summaries:
+        sections = '<div class="no-data">😶 今日暂无 AI 资讯</div>'
+    else:
+        for cat, emoji, color in cat_list:
+            items = grouped.get(cat, [])
+            if not items:
+                continue
+            cards = "\n".join(_news_card(i) for i in items)
+            sections += f"""<section class="section">
+  <div class="section-hdr" style="--cat-color:{color}">
+    <span class="section-icon">{emoji}</span>
+    <h2 class="section-title">{cat}</h2>
+    <span class="section-count">{len(items)}</span>
+  </div>
+  <div class="grid">{cards}</div>
+</section>"""
+
+    # ── 采集质量报告 ──
+    report_html = ""
+    if quality_report:
+        src_count   = quality_report.get("source_count", 0)
+        success_pct = quality_report.get("success_rate", 0)
+        art_total   = quality_report.get("article_count", 0)
+        fallback    = quality_report.get("fallback_triggered", False)
+        src_rows    = ""
+        for src_name, status in quality_report.get("sources", {}).items():
+            ok   = not str(status).startswith("failed")
+            icon = '<span class="src-ok">✅</span>' if ok else '<span class="src-fail">✗</span>'
+            src_rows += (
+                f'<div class="src-item">{icon} <span>{src_name}</span>'
+                f'<span style="color:var(--t3);margin-left:auto">{status}</span></div>'
+            )
+        pct_cls  = "quality-ok" if success_pct >= 67 else "quality-warn"
+        fall_cls = "quality-warn" if fallback else "quality-ok"
+        filtered_note = (
+            f'<div class="quality-item"><span class="quality-label">去重过滤</span>'
+            f'<span class="quality-value quality-warn">{filtered_count} 条</span></div>'
+            if filtered_count else ""
+        )
+        report_html = f"""<div class="quality-report">
+  <div class="quality-title">📊 本次采集质量报告</div>
+  <div class="quality-grid">
+    <div class="quality-item">
+      <span class="quality-label">数据来源</span>
+      <span class="quality-value">{src_count} 个</span>
+    </div>
+    <div class="quality-item">
+      <span class="quality-label">抓取成功率</span>
+      <span class="quality-value {pct_cls}">{success_pct}%</span>
+    </div>
+    <div class="quality-item">
+      <span class="quality-label">文章总数</span>
+      <span class="quality-value">{art_total} 条</span>
+    </div>
+    <div class="quality-item">
+      <span class="quality-label">备用源</span>
+      <span class="quality-value {fall_cls}">{'已触发' if fallback else '未触发'}</span>
+    </div>
+    {filtered_note}
+  </div>
+  <div class="src-list">{src_rows}</div>
+</div>"""
+
+    stats_bar = f"""<div class="stats">
+  <div class="pulse"></div>
+  <span>今日收录 <strong>{count}</strong> 条 AI 资讯</span>
+  <span class="dot-sep">·</span>
+  <span>由 <strong style="color:var(--purple)">Claude Sonnet</strong> 智能总结</span>
+  <span class="dot-sep">·</span>
+  <span>{date_str} {day_str} {time_str}</span>
+</div>"""
+
+    highlights_html = _render_highlights_block(highlights or [])
+    agent_html      = _render_agent_block(agent_decision)
+    body = warn_html + agent_html + stats_bar + "\n" + tracking_html + focus_html + highlights_html + sections + report_html
+    extra_css = NEWS_CSS + _mem_panel_css() + _agent_css()
+    html = _page_shell(f"AI 日报 · {date_str}", "today.html", body, extra_css)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_PATH.write_text(html, encoding="utf-8")
+    print(f"  ✅ today.html 生成完毕: {OUTPUT_PATH}")
+
+
+# ══════════════════════════════════════════════
+#  模型追踪 (models.html)
+# ══════════════════════════════════════════════
+
+def generate_models_html(model_versions: list[dict]) -> None:
+    total = sum(len(c.get("models", [])) for c in model_versions)
+    body  = f"""<div class="section-hdr" style="--cat-color:#f0c040;margin-bottom:1.5rem">
+  <span class="section-icon">📊</span>
+  <h2 class="section-title">主流模型版本追踪</h2>
+  <span class="section-count">{total} 个模型</span>
+</div>
+{_render_model_accordion(model_versions)}"""
+    html = _page_shell("模型版本追踪", "models.html", body, MODEL_CSS)
+    MODELS_HTML_PATH.write_text(html, encoding="utf-8")
+    print(f"  ✅ models.html 生成完毕")
+
+
+# ══════════════════════════════════════════════
+#  热词榜 (trending.html)
+# ══════════════════════════════════════════════
+
+TRENDING_CSS = """
+.tab-bar{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:1.5rem}
+.tab-btn{background:none;border:none;padding:.6rem 1.4rem;font-size:.88rem;font-weight:600;
+  color:var(--t3);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s}
+.tab-btn.active{color:var(--blue);border-bottom-color:var(--blue)}
+.tab-panel{display:none}.tab-panel.active{display:block}
+.kw-cloud{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:2rem}
+.kw-chip{display:inline-flex;align-items:center;gap:.4rem;
+  padding:.35rem .85rem;border-radius:20px;font-size:.82rem;
+  background:var(--bg2);border:1px solid var(--border);cursor:pointer;transition:all .15s}
+.kw-chip:hover{border-color:var(--blue);background:var(--bg3)}
+.kw-emoji{font-size:1rem}
+.kw-word{font-weight:600;color:var(--t1)}
+.kw-heat{font-size:.7rem;padding:.1rem .4rem;border-radius:10px;margin-left:.15rem}
+.heat-极热{background:rgba(255,123,114,.15);color:var(--red)}
+.heat-热门{background:rgba(240,136,62,.15);color:var(--orange)}
+.heat-上升中{background:rgba(63,185,80,.15);color:var(--green)}
+.kw-summary{font-size:.72rem;color:var(--t3);margin-top:.1rem}
+.trend-badge{font-size:.68rem;padding:.05rem .3rem;border-radius:8px;margin-left:.2rem;font-weight:600}
+.trend-NEW{background:rgba(63,185,80,.2);color:var(--green)}
+.trend-up{color:var(--green);font-weight:700}
+.trend-down{color:var(--red);font-weight:700}
+.trend-stable{color:var(--t3)}
+.post-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;
+  padding:1rem;display:flex;flex-direction:column;gap:.5rem;transition:all .15s}
+.post-card:hover{border-color:var(--blue);background:var(--bg3)}
+.post-title{font-size:.9rem;font-weight:600;color:var(--t1)}
+.post-meta{display:flex;align-items:center;gap:.75rem;font-size:.75rem;color:var(--t3)}
+.post-score{color:var(--orange)}
+.post-link{color:var(--blue);text-decoration:none;font-size:.78rem;margin-top:.2rem}
+.post-link:hover{text-decoration:underline}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9000;
+  align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal-box{background:var(--bg1);border:1px solid var(--border);border-radius:16px;
+  max-width:600px;width:90vw;max-height:85vh;overflow-y:auto;padding:1.5rem;position:relative}
+.modal-close{position:absolute;top:1rem;right:1rem;background:none;border:none;
+  font-size:1.3rem;cursor:pointer;color:var(--t3);line-height:1}
+.modal-kw{font-size:1.2rem;font-weight:700;color:var(--t1);margin-bottom:.4rem}
+.modal-brief{font-size:.88rem;color:var(--t2);margin-bottom:1rem;
+  padding:.5rem .8rem;background:var(--bg2);border-radius:8px}
+.modal-section-title{font-size:.78rem;font-weight:700;color:var(--t3);
+  text-transform:uppercase;letter-spacing:.05em;margin:.9rem 0 .35rem}
+.modal-bg{font-size:.84rem;color:var(--t2);line-height:1.6}
+.modal-points{padding-left:1.2rem;margin:0}
+.modal-points li{font-size:.84rem;color:var(--t2);margin-bottom:.25rem}
+.modal-sources a{font-size:.8rem;color:var(--blue);text-decoration:none;display:block;margin-bottom:.2rem}
+.modal-sources a:hover{text-decoration:underline}
+.history-chart{width:100%;height:80px;margin-top:.5rem}
+.loading-spinner{text-align:center;padding:2rem;color:var(--t3);font-size:.88rem}
+"""
+
+
+def generate_trending_html(data: dict, topic_summaries: list = None) -> None:
+    now = datetime.now()
+    keywords  = data.get("keywords", [])
+    top_posts = data.get("top_posts", [])
+
+    summaries_map: dict = {}
+    if topic_summaries:
+        for s in topic_summaries:
+            summaries_map[s.get("keyword", "")] = s
+
+    kw_html = ""
+    for kw in keywords:
+        heat    = kw.get("heat", "热门")
+        keyword = kw.get("keyword", "")
+        safe_kw = keyword.replace("&", "&amp;").replace('"', "&quot;")
+        kw_html += (
+            f'<div class="kw-chip" data-kw="{safe_kw}" onclick="openModal(this.dataset.kw)">'
+            f'<span class="kw-emoji">{kw.get("emoji","🔥")}</span>'
+            f'<div>'
+            f'<span class="kw-word">{keyword}</span>'
+            f'<span class="kw-heat heat-{heat}">{heat}</span>'
+            f'<div class="kw-summary">{kw.get("summary","")}</div>'
+            f'</div></div>'
+        )
+
+    post_html = ""
+    for p in top_posts:
+        post_html += (
+            f'<div class="post-card">'
+            f'<div class="post-title">{p.get("title","")}</div>'
+            f'<div class="post-meta">'
+            f'<span>{p.get("source","")}</span>'
+            f'<span class="post-score">▲ {p.get("score",0)}</span>'
+            f'</div>'
+            f'<a class="post-link" href="{p.get("url","#")}" target="_blank" rel="noopener">查看原帖 →</a>'
+            f'</div>'
+        )
+
+    summaries_js = json.dumps(summaries_map, ensure_ascii=False)
+    kw_cloud_html  = kw_html  if kw_html  else '<div class="no-data">暂无热词数据</div>'
+    post_grid_html = post_html if post_html else '<div class="no-data">暂无帖子数据</div>'
+
+    body = (
+        '<div id="modal-overlay" class="modal-overlay" onclick="if(event.target===this)closeModal()">'
+        '<div class="modal-box">'
+        '<button class="modal-close" onclick="closeModal()">✕</button>'
+        '<div id="modal-kw" class="modal-kw"></div>'
+        '<div id="modal-brief" class="modal-brief"></div>'
+        '<div class="modal-section-title">背景</div>'
+        '<div id="modal-bg" class="modal-bg"></div>'
+        '<div class="modal-section-title">关键要点</div>'
+        '<ul id="modal-points" class="modal-points"></ul>'
+        '<div class="modal-section-title">相关来源</div>'
+        '<div id="modal-sources" class="modal-sources"></div>'
+        '<div id="modal-hist-title" class="modal-section-title" style="display:none">历史趋势</div>'
+        '<canvas id="modal-chart" class="history-chart" style="display:none"></canvas>'
+        '</div></div>'
+        f'<div class="stats"><div class="pulse"></div>'
+        f'<span>今日 AI 热词 <strong>{len(keywords)}</strong> 个</span>'
+        f'<span class="dot-sep">·</span>'
+        f'<span>热门帖子 <strong>{len(top_posts)}</strong> 条</span>'
+        f'<span class="dot-sep">·</span>'
+        f'<span>更新于 {now.strftime("%H:%M")}</span></div>'
+        '<div class="tab-bar">'
+        '<button class="tab-btn active" onclick="switchTab(\'today\',this)">📅 今日</button>'
+        '<button class="tab-btn" onclick="switchTab(\'week\',this)">📆 本周</button>'
+        '<button class="tab-btn" onclick="switchTab(\'month\',this)">🗓 本月</button>'
+        '</div>'
+        '<div id="tab-today" class="tab-panel active">'
+        f'<section class="section"><div class="section-hdr" style="--cat-color:#ff7b72">'
+        f'<span class="section-icon">🔥</span><h2 class="section-title">今日热词云</h2>'
+        f'<span class="section-count">{len(keywords)}</span></div>'
+        f'<div class="kw-cloud">{kw_cloud_html}</div></section>'
+        f'<section class="section"><div class="section-hdr" style="--cat-color:#f0883e">'
+        f'<span class="section-icon">💬</span><h2 class="section-title">热门帖子</h2>'
+        f'<span class="section-count">{len(top_posts)}</span></div>'
+        f'<div class="grid">{post_grid_html}</div></section>'
+        '</div>'
+        '<div id="tab-week" class="tab-panel">'
+        '<div id="week-content"><div class="loading-spinner">加载中...</div></div></div>'
+        '<div id="tab-month" class="tab-panel">'
+        '<div id="month-content"><div class="loading-spinner">加载中...</div></div></div>'
+        f'<script>\nconst SUMMARIES={summaries_js};\n'
+        f'const CLOUD_API="{CLOUD_BASE}";\n'
+        'const LOADED={};\n'
+        'function switchTab(name,btn){\n'
+        '  document.querySelectorAll(".tab-btn").forEach(function(b){b.classList.remove("active");});\n'
+        '  document.querySelectorAll(".tab-panel").forEach(function(p){p.classList.remove("active");});\n'
+        '  btn.classList.add("active");\n'
+        '  document.getElementById("tab-"+name).classList.add("active");\n'
+        '  if((name==="week"||name==="month")&&!LOADED[name]){\n'
+        '    LOADED[name]=true;\n'
+        '    loadTopics(name);\n'
+        '  }\n'
+        '}\n'
+        'function trendLabel(t){\n'
+        '  if(t==="NEW")return\'<span class="trend-badge trend-NEW">NEW</span>\';\n'
+        '  if(t==="up")return\'<span class="trend-up"> ↑</span>\';\n'
+        '  if(t==="down")return\'<span class="trend-down"> ↓</span>\';\n'
+        '  return\'<span class="trend-stable"> →</span>\';\n'
+        '}\n'
+        'async function loadTopics(range){\n'
+        '  var el=document.getElementById(range+"-content");\n'
+        '  try{\n'
+        '    var r=await fetch(CLOUD_API+"/topics?range="+range);\n'
+        '    var d=await r.json();\n'
+        '    var topics=d.topics||[];\n'
+        '    if(!topics.length){el.innerHTML=\'<div class="no-data">暂无数据</div>\';return;}\n'
+        '    var html=\'<div class="kw-cloud">\';\n'
+        '    for(var i=0;i<topics.length;i++){\n'
+        '      var t=topics[i];\n'
+        '      var heat=t.heat||"热门";\n'
+        '      html+=\'<div class="kw-chip" data-kw="\'+t.keyword.replace(/"/g,"&quot;")+\'" onclick="openModalCloud(this.dataset.kw)">\'+'
+        '\'<span class="kw-emoji">🔥</span><div>\'+'
+        '\'<span class="kw-word">\'+t.keyword+\'</span>\'+'
+        '\'<span class="kw-heat heat-\'+heat+\'">\'+heat+\'</span>\'+'
+        'trendLabel(t.trend)+'
+        '\'<div class="kw-summary">\'+( t.summary||"")+\'</div></div></div>\';\n'
+        '    }\n'
+        '    html+=\'</div>\';\n'
+        '    el.innerHTML=html;\n'
+        '  }catch(e){\n'
+        '    el.innerHTML=\'<div class="no-data">加载失败，请检查网络连接</div>\';\n'
+        '  }\n'
+        '}\n'
+        'function openModal(keyword){\n'
+        '  var s=SUMMARIES[keyword]||{};\n'
+        '  showModal(keyword,s,null);\n'
+        '}\n'
+        'async function openModalCloud(keyword){\n'
+        '  showModal(keyword,{},null);\n'
+        '  try{\n'
+        '    var r=await fetch(CLOUD_API+"/topic/"+encodeURIComponent(keyword));\n'
+        '    var d=await r.json();\n'
+        '    showModal(keyword,d,d.history||[]);\n'
+        '  }catch(e){}\n'
+        '}\n'
+        'function showModal(keyword,s,history){\n'
+        '  document.getElementById("modal-kw").textContent=keyword;\n'
+        '  document.getElementById("modal-brief").textContent=s.brief||"（暂无简介）";\n'
+        '  document.getElementById("modal-bg").textContent=s.background||"（暂无背景）";\n'
+        '  var pts=s.key_points||[];\n'
+        '  var ul=document.getElementById("modal-points");\n'
+        '  ul.innerHTML="";\n'
+        '  if(pts.length){for(var i=0;i<pts.length;i++){var li=document.createElement("li");li.textContent=pts[i];ul.appendChild(li);}}\n'
+        '  else{ul.innerHTML="<li>暂无要点</li>";}\n'
+        '  var srcs=s.sources||[];\n'
+        '  var srcEl=document.getElementById("modal-sources");\n'
+        '  srcEl.innerHTML=srcs.length?srcs.map(function(src){return\'<a href="#" target="_blank">\'+src+\'</a>\';}).join(""):"（暂无来源）";\n'
+        '  var histEl=document.getElementById("modal-hist-title");\n'
+        '  var canvas=document.getElementById("modal-chart");\n'
+        '  if(history&&history.length>0){histEl.style.display="";canvas.style.display="";drawChart(canvas,history);}\n'
+        '  else{histEl.style.display="none";canvas.style.display="none";}\n'
+        '  document.getElementById("modal-overlay").classList.add("open");\n'
+        '  document.body.style.overflow="hidden";\n'
+        '}\n'
+        'function closeModal(){\n'
+        '  document.getElementById("modal-overlay").classList.remove("open");\n'
+        '  document.body.style.overflow="";\n'
+        '}\n'
+        'document.addEventListener("keydown",function(e){if(e.key==="Escape")closeModal();});\n'
+        'function drawChart(canvas,history){\n'
+        '  var ctx=canvas.getContext("2d");\n'
+        '  var w=canvas.parentElement.offsetWidth||500;\n'
+        '  var h=80;canvas.width=w;canvas.height=h;\n'
+        '  ctx.clearRect(0,0,w,h);\n'
+        '  var counts=history.map(function(item){return Number(item.count)||0;});\n'
+        '  var maxC=Math.max.apply(null,counts.concat([1]));\n'
+        '  var barW=Math.floor(w/(counts.length+1));\n'
+        '  var pad=Math.max(2,Math.floor(barW*0.15));\n'
+        '  for(var i=0;i<counts.length;i++){\n'
+        '    var c=counts[i];\n'
+        '    var x=i*barW+pad;\n'
+        '    var barH=Math.max(2,Math.floor((c/maxC)*(h-20)));\n'
+        '    var y=h-barH-15;\n'
+        '    ctx.fillStyle="#388bfd";\n'
+        '    ctx.beginPath();\n'
+        '    if(ctx.roundRect){ctx.roundRect(x,y,barW-pad*2,barH,3);}else{ctx.rect(x,y,barW-pad*2,barH);}\n'
+        '    ctx.fill();\n'
+        '    if(history[i]&&history[i].date){ctx.fillStyle="#8b949e";ctx.font="9px sans-serif";ctx.fillText(history[i].date.slice(5),x,h-2);}\n'
+        '  }\n'
+        '}\n'
+        '</script>'
+    )
+
+    html = _page_shell("AI 热词榜", "trending.html", body, TRENDING_CSS)
+    TRENDING_HTML_PATH.write_text(html, encoding="utf-8")
+    print(f"  ✅ trending.html 生成完毕")
+
+
+# ══════════════════════════════════════════════
+#  模型竞技场 (benchmark.html)
+# ══════════════════════════════════════════════
+
+BENCHMARK_CSS = """
+.bm-section{margin-bottom:2.5rem;background:var(--bg2);border:1px solid var(--border);
+  border-radius:12px;padding:1.4rem}
+.bm-title{font-size:1rem;font-weight:700;color:var(--t1);margin-bottom:.3rem}
+.bm-desc{font-size:.8rem;color:var(--t3);margin-bottom:1.1rem}
+.bar-row{display:flex;align-items:center;gap:.75rem;margin-bottom:.55rem}
+.bar-model{width:160px;font-size:.8rem;color:var(--t2);text-align:right;flex-shrink:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar-track{flex:1;background:var(--bg3);border-radius:4px;height:22px;overflow:hidden;position:relative}
+.bar-fill{height:100%;border-radius:4px;display:flex;align-items:center;
+  padding-left:.5rem;font-size:.75rem;font-weight:600;color:#fff;
+  background:linear-gradient(90deg,var(--blue),var(--purple));
+  transition:width .4s ease;min-width:2rem}
+.bar-company{width:70px;font-size:.7rem;color:var(--t3);flex-shrink:0}
+"""
+
+
+def generate_benchmark_html(data: dict) -> None:
+    benchmarks = data.get("benchmarks", [])
+    body_parts = [f"""<div class="stats">
+  <div class="pulse"></div>
+  <span>收录 <strong>{len(benchmarks)}</strong> 个基准测试</span>
+  <span class="dot-sep">·</span>
+  <span>数据来源：PapersWithCode · lmsys</span>
+</div>"""]
+
+    for bm in benchmarks:
+        models = sorted(bm.get("models", []), key=lambda x: x.get("score", 0), reverse=True)
+        if not models:
+            continue
+        max_score = max(m.get("score", 0) for m in models) or 100
+        rows = ""
+        for m in models:
+            score = m.get("score", 0)
+            pct   = round(score / max_score * 100, 1)
+            rows += f"""<div class="bar-row">
+  <div class="bar-model" title="{m.get('model','')}">{m.get('model','')}</div>
+  <div class="bar-track">
+    <div class="bar-fill" style="width:{pct}%">{score}{bm.get('unit','')}</div>
+  </div>
+  <div class="bar-company">{m.get('company','')}</div>
+</div>"""
+        body_parts.append(f"""<div class="bm-section">
+  <div class="bm-title">{bm.get('name','')}</div>
+  <div class="bm-desc">{bm.get('description','')}</div>
+  {rows}
+</div>""")
+
+    if len(body_parts) == 1:
+        body_parts.append('<div class="no-data">暂无 Benchmark 数据</div>')
+
+    html = _page_shell("模型竞技场", "benchmark.html", "\n".join(body_parts), BENCHMARK_CSS)
+    BENCHMARK_HTML_PATH.write_text(html, encoding="utf-8")
+    print(f"  ✅ benchmark.html 生成完毕")
+
+
+# ══════════════════════════════════════════════
+#  AI 工具库 (tools.html)
+# ══════════════════════════════════════════════
+
+TOOL_CATS = [
+    ("写作",  "#58a6ff"), ("编程",  "#3fb950"), ("图像",  "#bc8cff"),
+    ("音频",  "#f0883e"), ("效率",  "#f0c040"), ("框架",  "#ff7b72"),
+    ("数据",  "#9e9e9e"),
+]
+
+TOOLS_CSS = """
+.tool-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;
+  padding:1rem;display:flex;flex-direction:column;gap:.5rem;transition:all .15s}
+.tool-card:hover{border-color:var(--blue);background:var(--bg3)}
+.tool-name{font-size:.95rem;font-weight:700;color:var(--t1)}
+.tool-desc{font-size:.82rem;color:var(--t2);flex:1}
+.tool-foot{display:flex;align-items:center;justify-content:space-between;
+  font-size:.75rem;color:var(--t3)}
+.tool-stars{color:var(--yellow)}
+.tool-link{color:var(--blue);text-decoration:none}
+.tool-link:hover{text-decoration:underline}
+.cat-badge{padding:.18rem .55rem;border-radius:20px;font-size:.68rem;font-weight:600}
+"""
+
+
+def generate_tools_html(tools: list[dict]) -> None:
+    cat_colors = dict(TOOL_CATS)
+    grouped: dict[str, list] = {}
+    for t in tools:
+        cat = t.get("category", "其他")
+        grouped.setdefault(cat, []).append(t)
+
+    body_parts = [f"""<div class="stats">
+  <div class="pulse"></div>
+  <span>今日收录 <strong>{len(tools)}</strong> 款 AI 工具</span>
+  <span class="dot-sep">·</span>
+  <span>来源：GitHub Trending</span>
+</div>"""]
+
+    for cat, items in grouped.items():
+        color = cat_colors.get(cat, "#8b949e")
+        cards = ""
+        for t in items:
+            cards += f"""<div class="tool-card">
+  <div class="tool-name">
+    <span class="cat-badge" style="background:rgba(88,166,255,.1);color:{color};border:1px solid {color}40">{cat}</span>
+    {t.get('name','')}
+  </div>
+  <div class="tool-desc">{t.get('description','')}</div>
+  <div class="tool-foot">
+    <span class="tool-stars">⭐ {t.get('stars','')}</span>
+    <a class="tool-link" href="{t.get('link','#')}" target="_blank" rel="noopener">→ 查看</a>
+  </div>
+</div>"""
+        body_parts.append(f"""<section class="section">
+  <div class="section-hdr" style="--cat-color:{color}">
+    <span class="section-icon">🧰</span>
+    <h2 class="section-title">{cat}</h2>
+    <span class="section-count">{len(items)}</span>
+  </div>
+  <div class="grid">{cards}</div>
+</section>""")
+
+    if not tools:
+        body_parts.append('<div class="no-data">暂无工具数据</div>')
+
+    html = _page_shell("AI 工具库", "tools.html", "\n".join(body_parts), TOOLS_CSS)
+    TOOLS_HTML_PATH.write_text(html, encoding="utf-8")
+    print(f"  ✅ tools.html 生成完毕")
+
+
+# ══════════════════════════════════════════════
+#  AI 求职动态 (jobs.html)
+# ══════════════════════════════════════════════
+
+JOBS_CSS = """
+.job-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+  padding:1.3rem;display:flex;flex-direction:column;gap:.8rem;transition:all .15s}
+.job-card:hover{border-color:var(--blue);background:var(--bg3)}
+.job-company{font-size:1rem;font-weight:700;color:var(--blue)}
+.job-focus{font-size:.85rem;color:var(--t1);font-weight:500}
+.job-roles{display:flex;flex-wrap:wrap;gap:.4rem}
+.role-tag{padding:.18rem .55rem;background:rgba(88,166,255,.08);
+  border:1px solid rgba(88,166,255,.2);border-radius:20px;
+  font-size:.72rem;color:var(--blue)}
+.job-trend{font-size:.8rem;color:var(--t3);line-height:1.5}
+.job-link{color:var(--blue);text-decoration:none;font-size:.8rem}
+.job-link:hover{text-decoration:underline}
+"""
+
+
+def generate_jobs_html(companies: list[dict]) -> None:
+    cards = ""
+    for co in companies:
+        roles = "".join(f'<span class="role-tag">{r}</span>' for r in co.get("roles", []))
+        cards += f"""<div class="job-card">
+  <div class="job-company">{co.get('company','')}</div>
+  <div class="job-focus">{co.get('focus','')}</div>
+  <div class="job-roles">{roles}</div>
+  <div class="job-trend">📈 {co.get('trend','')}</div>
+  <a class="job-link" href="{co.get('link','#')}" target="_blank" rel="noopener">→ 查看招聘页面</a>
+</div>"""
+
+    body = f"""<div class="stats">
+  <div class="pulse"></div>
+  <span>覆盖 <strong>{len(companies)}</strong> 家顶级 AI 公司</span>
+  <span class="dot-sep">·</span>
+  <span>数据每日更新</span>
+</div>
+<div class="grid">{''.join(cards) if cards else '<div class="no-data">暂无招聘数据</div>'}</div>"""
+
+    html = _page_shell("AI 求职动态", "jobs.html", body, JOBS_CSS)
+    JOBS_HTML_PATH.write_text(html, encoding="utf-8")
+    print(f"  ✅ jobs.html 生成完毕")
+
+
+# ══════════════════════════════════════════════
+#  首页 (index.html)
+# ══════════════════════════════════════════════
+
+INDEX_CSS = """
+.hero{text-align:center;padding:3rem 1rem 2.5rem;border-bottom:1px solid var(--border);margin-bottom:2.5rem}
+.hero-date{font-size:.85rem;color:var(--t3);margin-bottom:.5rem}
+.hero-title{font-size:2.2rem;font-weight:800;
+  background:linear-gradient(135deg,var(--blue),var(--purple));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  margin-bottom:.75rem}
+.hero-brief{font-size:.95rem;color:var(--t2);max-width:560px;margin:0 auto 1.2rem;line-height:1.7}
+.hero-tags{display:flex;justify-content:center;gap:.5rem;flex-wrap:wrap}
+.hero-tag{padding:.25rem .7rem;background:var(--bg2);border:1px solid var(--border);
+  border-radius:20px;font-size:.75rem;color:var(--t2)}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1.25rem}
+.hub-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;
+  padding:1.5rem;display:flex;flex-direction:column;gap:.7rem;
+  text-decoration:none;color:inherit;transition:all .2s ease}
+.hub-card:hover{background:var(--bg3);border-color:var(--hub-color,var(--blue));
+  transform:translateY(-3px);box-shadow:0 10px 30px rgba(0,0,0,.3)}
+.hub-icon{font-size:2rem;line-height:1}
+.hub-title{font-size:1.05rem;font-weight:700;color:var(--hub-color,var(--t1))}
+.hub-desc{font-size:.82rem;color:var(--t2);line-height:1.6;flex:1}
+.hub-action{font-size:.78rem;color:var(--hub-color,var(--blue));font-weight:500;margin-top:.25rem}
+"""
+
+HUB_CARDS = [
+    ("📊", "模型版本追踪", "models.html",    "#58a6ff",
+     "实时抓取 OpenAI / Anthropic / Google / Meta 官网，追踪最新模型版本、功能更新与历史里程碑"),
+    ("🔥", "AI 热词榜",   "trending.html",   "#ff7b72",
+     "每日抓取 Reddit AI 社区热帖，提炼今日最热话题关键词与代表性讨论"),
+    ("📈", "模型竞技场",  "benchmark.html",  "#3fb950",
+     "从 PapersWithCode 抓取最新 Benchmark 数据，可视化对比各大模型编程/推理/写作得分"),
+    ("🧰", "AI 工具库",   "tools.html",      "#bc8cff",
+     "每日扫描 GitHub Trending，精选最新 AI 工具，按写作/编程/图像/音频/效率分类展示"),
+    ("💼", "AI 求职动态", "jobs.html",       "#f0883e",
+     "抓取 OpenAI / Anthropic / Google / Meta / xAI 招聘页，总结各公司在招方向与行业趋势"),
+    ("📰", "今日 AI 日报","today.html",      "#f0c040",
+     "从 TechCrunch / arXiv / O'Reilly 抓取今日 AI 资讯，由 Claude 智能分类总结"),
+    ("📚", "历史归档",    "archive.html",    "#9e9e9e",
+     "按日期浏览每天的 AI 日报存档，左侧日期列表点击即可查看"),
+]
+
+
+def generate_index_html(summaries: list[dict]) -> None:
+    now      = datetime.now()
+    date_str = now.strftime("%Y年%m月%d日")
+    weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    day_str  = weekdays[now.weekday()]
+
+    if summaries:
+        brief = f"今日共收录 {len(summaries)} 条 AI 资讯，涵盖大模型动态、AI 产品更新、研究进展等领域。"
+    else:
+        brief = "今日资讯整理中，请稍候访问各子页面获取最新内容。"
+
+    tags = ["大模型动态", "AI 工具", "研究进展", "行业资讯", "Benchmark"]
+    tags_html = "".join(f'<span class="hero-tag">{t}</span>' for t in tags)
+
+    cards_html = ""
+    for emoji, title, url, color, desc in HUB_CARDS:
+        cards_html += f"""<a class="hub-card" href="{url}" style="--hub-color:{color}">
+  <div class="hub-icon">{emoji}</div>
+  <div class="hub-title">{title}</div>
+  <div class="hub-desc">{desc}</div>
+  <div class="hub-action">进入 →</div>
+</a>"""
+
+    body = f"""<div class="hero">
+  <div class="hero-date">{date_str} &nbsp;{day_str}</div>
+  <h1 class="hero-title">AI 导航中心</h1>
+  <div class="hero-brief">{brief}</div>
+  <div class="hero-tags">{tags_html}</div>
+</div>
+<div class="hub-grid">{cards_html}</div>"""
+
+    html = _page_shell("AI 导航中心", "index.html", body, INDEX_CSS)
+    INDEX_HTML_PATH.write_text(html, encoding="utf-8")
+    print(f"  ✅ index.html 生成完毕")
+
+
+# ══════════════════════════════════════════════
+#  历史归档 (archive.html)
+# ══════════════════════════════════════════════
+
+ARCHIVE_CSS = """
+body{height:100vh;overflow:hidden;display:flex;flex-direction:column}
+.layout{display:flex;flex:1;overflow:hidden}
+.sidebar{width:210px;min-width:170px;background:var(--bg1);
+  border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0}
+.sidebar-hdr{padding:.7rem 1rem;font-size:.7rem;font-weight:700;
+  color:var(--t3);letter-spacing:.08em;border-bottom:1px solid var(--border);
+  position:sticky;top:0;background:var(--bg1)}
+.date-item{padding:.55rem 1rem;cursor:pointer;border-bottom:1px solid rgba(48,54,61,.5);
+  font-size:.83rem;color:var(--t2);display:flex;justify-content:space-between;
+  align-items:center;border-left:2px solid transparent;transition:all .12s}
+.date-item:hover{background:var(--bg2);color:var(--t1)}
+.date-item.active{background:rgba(88,166,255,.08);color:var(--blue);border-left-color:var(--blue)}
+.date-count{font-size:.68rem;color:var(--t3);background:var(--bg3);
+  padding:.08rem .4rem;border-radius:10px;flex-shrink:0}
+.content{flex:1;overflow-y:auto;padding:1.5rem 2rem}
+.day-header{display:flex;align-items:baseline;gap:1rem;margin-bottom:1.5rem;
+  padding-bottom:.9rem;border-bottom:1px solid var(--border)}
+.day-title{font-size:1.3rem;font-weight:700}
+.day-count{font-size:.82rem;color:var(--t3)}
+.card-top{display:flex}.card-title{font-size:.92rem;font-weight:600;color:var(--t1);line-height:1.5}
+.card-summary{font-size:.83rem;color:var(--t2);line-height:1.75;flex:1}
+.card-foot{display:flex;align-items:center;justify-content:space-between;gap:.6rem;
+  padding-top:.6rem;border-top:1px solid var(--border)}
+.orig-title{font-size:.68rem;color:var(--t3);flex:1;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:italic}
+.btn-read{display:inline-flex;align-items:center;white-space:nowrap;
+  padding:.25rem .68rem;border:1px solid rgba(88,166,255,.3);border-radius:6px;
+  color:var(--blue);text-decoration:none;font-size:.73rem;font-weight:500;transition:all .15s}
+.btn-read:hover{background:rgba(88,166,255,.1);border-color:var(--blue)}
+@media(max-width:680px){
+  body{height:auto;overflow:auto}
+  .layout{flex-direction:column;overflow:visible}
+  .sidebar{width:100%;max-height:180px;border-right:none;border-bottom:1px solid var(--border)}
+  .content{padding:1rem}
+}
+"""
+
+ARCHIVE_JS = """
+const ARCHIVE_DATA = __ARCHIVE_JSON__;
+const CATEGORIES = [
+  {key:"大模型动态",emoji:"🤖",color:"#58a6ff"},
+  {key:"AI产品与工具",emoji:"🛠️",color:"#3fb950"},
+  {key:"AI研究进展",emoji:"🔬",color:"#bc8cff"},
+  {key:"AI商业动态",emoji:"💰",color:"#f0883e"},
+  {key:"AI政策与监管",emoji:"🌍",color:"#ff7b72"},
+  {key:"其他",emoji:"📌",color:"#8b949e"},
+];
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function renderDay(date){
+  const data=ARCHIVE_DATA[date];if(!data)return;
+  const arts=data.articles||[];
+  const grouped={};CATEGORIES.forEach(c=>{grouped[c.key]=[];});
+  arts.forEach(a=>{const cat=a.category||'其他';(grouped[cat]||(grouped['其他'])).push(a);});
+  let html=`<div class="day-header"><h1 class="day-title">${date}</h1><span class="day-count">${arts.length} 条资讯</span></div>`;
+  if(!arts.length){html+='<div class="no-data">😶 该日暂无归档资讯</div>';}
+  else{
+    CATEGORIES.forEach(cat=>{
+      const items=grouped[cat.key]||[];if(!items.length)return;
+      html+=`<section class="section"><div class="section-hdr" style="--cat-color:${cat.color}">
+        <span class="section-icon">${cat.emoji}</span><h2 class="section-title">${cat.key}</h2>
+        <span class="section-count">${items.length}</span></div><div class="grid">`;
+      items.forEach(item=>{
+        const ot=esc(item.original_title);const short=ot.length>55?ot.slice(0,55)+'…':ot;
+        html+=`<div class="card"><div class="card-top"><span class="badge">${esc(item.source)}</span></div>
+          <h2 class="card-title">${esc(item.chinese_title)}</h2>
+          <p class="card-summary">${esc(item.chinese_summary)}</p>
+          <div class="card-foot"><span class="orig-title" title="${ot}">${short}</span>
+          <a class="btn-read" href="${esc(item.link)}" target="_blank" rel="noopener">阅读原文 →</a></div></div>`;
+      });
+      html+='</div></section>';
+    });
+  }
+  document.getElementById('content').innerHTML=html;
+  document.querySelectorAll('.date-item').forEach(el=>el.classList.toggle('active',el.dataset.date===date));
+}
+const dates=Object.keys(ARCHIVE_DATA).sort().reverse();
+const listEl=document.getElementById('date-list');
+if(!dates.length){listEl.innerHTML='<div style="padding:1rem;color:var(--t3);font-size:.8rem">暂无归档</div>';}
+else{
+  dates.forEach(date=>{
+    const count=(ARCHIVE_DATA[date].articles||[]).length;
+    const el=document.createElement('div');el.className='date-item';el.dataset.date=date;
+    el.innerHTML=`<span>${date}</span><span class="date-count">${count}</span>`;
+    el.onclick=()=>renderDay(date);listEl.appendChild(el);
+  });
+  renderDay(dates[0]);
+}
+"""
+
+
+def generate_archive_html() -> None:
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    archive_data: dict = {}
+    for f in sorted(ARCHIVE_DIR.glob("*.json"), reverse=True):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            archive_data[d.get("date", f.stem)] = d
+        except Exception as e:
+            print(f"  ⚠ 读取归档失败 {f.name}: {e}")
+
+    archive_json = json.dumps(archive_data, ensure_ascii=False)
+    nav_html = ""
+    for emoji, label, url in NAV_PAGES:
+        cls = " nav-active" if url == "archive.html" else ""
+        nav_html += f'<a href="{url}" class="nav-item{cls}">{emoji} {label}</a>'
+
+    now      = datetime.now()
+    date_str = now.strftime("%Y年%m月%d日")
+
+    mem_stats    = get_memory_stats()
+    mem_panel    = _render_mem_stats_panel(mem_stats)
+    mem_css      = _mem_panel_css()
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>历史归档 · AI 导航</title>
+<style>
+{SHARED_CSS}
+{ARCHIVE_CSS}
+{mem_css}
+</style>
+</head>
+<body>
+<header class="hdr">
+  <div class="hdr-inner">
+    <a class="brand" href="index.html">
+      <div class="brand-icon">🤖</div>
+      <div class="brand-name">AI 导航</div>
+    </a>
+    <nav class="nav">{nav_html}</nav>
+  </div>
+</header>
+{mem_panel}
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-hdr">📅 历史日期</div>
+    <div id="date-list"></div>
+  </aside>
+  <main class="content" id="content">
+    <div class="no-data">请从左侧选择日期</div>
+  </main>
+</div>
+<script>
+{ARCHIVE_JS.replace('__ARCHIVE_JSON__', archive_json)}
+</script>
+</body>
+</html>"""
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    ARCHIVE_HTML_PATH.write_text(html, encoding="utf-8")
+    print(f"  ✅ archive.html 生成完毕")
