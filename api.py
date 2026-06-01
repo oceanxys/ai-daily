@@ -128,6 +128,27 @@ def init_db():
                         created_at       TIMESTAMP DEFAULT NOW()
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS run_status (
+                        id                 SERIAL PRIMARY KEY,
+                        run_at             TIMESTAMPTZ DEFAULT NOW(),
+                        start_time         TEXT,
+                        end_time           TEXT,
+                        elapsed_seconds    REAL,
+                        hot_topic          TEXT,
+                        article_count      INTEGER DEFAULT 0,
+                        fallback_triggered BOOLEAN DEFAULT FALSE,
+                        filtered_count     INTEGER DEFAULT 0,
+                        sources            JSONB,
+                        quality_report     JSONB,
+                        pushed             JSONB,
+                        warnings           JSONB
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_run_status_run_at
+                    ON run_status(run_at DESC)
+                """)
             conn.commit()
         print("✅ 数据库表初始化完成")
     except Exception as e:
@@ -718,6 +739,99 @@ def get_highlights():
                 """)
                 rows = [dict(r) for r in cur.fetchall()]
         return jsonify({"highlights": rows, "count": len(rows), "date": today})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── POST /update_run_status 写入最近一次运行状态 ──────────────
+@app.route("/update_run_status", methods=["POST"])
+@require_write_token
+def update_run_status():
+    if not request.is_json:
+        return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 400
+    body = request.get_json(silent=True) or {}
+
+    if not DATABASE_URL:
+        return jsonify({"success": True, "message": "文件模式，跳过写入"})
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO run_status
+                        (start_time, end_time, elapsed_seconds, hot_topic, article_count,
+                         fallback_triggered, filtered_count, sources, quality_report, pushed, warnings)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, run_at
+                """, (
+                    body.get("start_time"),
+                    body.get("end_time"),
+                    body.get("elapsed_seconds"),
+                    body.get("hot_topic"),
+                    body.get("article_count", 0),
+                    body.get("fallback_triggered", False),
+                    body.get("filtered_count", 0),
+                    json.dumps(body.get("sources", {}), ensure_ascii=False),
+                    json.dumps(body.get("quality_report", {}), ensure_ascii=False),
+                    json.dumps(body.get("pushed", {}), ensure_ascii=False),
+                    json.dumps(body.get("warnings", []), ensure_ascii=False),
+                ))
+                row = cur.fetchone()
+            conn.commit()
+        return jsonify({
+            "success": True,
+            "id":      row[0],
+            "run_at":  row[1].isoformat(),
+            "message": "运行状态已记录",
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── GET /run_status 查询最近 N 次运行状态 ─────────────────────
+@app.route("/run_status", methods=["GET"])
+def get_run_status():
+    """最近 N 次运行状态，按 run_at 降序。默认 limit=10，上限 50。"""
+    try:
+        limit = min(int(request.args.get("limit", 10)), 50)
+    except (ValueError, TypeError):
+        limit = 10
+    if limit < 1:
+        limit = 1
+
+    if not DATABASE_URL:
+        return jsonify({"runs": [], "count": 0, "source": "file"})
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT id, run_at, start_time, end_time, elapsed_seconds, hot_topic,
+                           article_count, fallback_triggered, filtered_count,
+                           sources, quality_report, pushed, warnings
+                    FROM run_status
+                    ORDER BY run_at DESC
+                    LIMIT %s
+                """, (limit,))
+                rows = cur.fetchall()
+        runs = []
+        for r in rows:
+            runs.append({
+                "id":                 r["id"],
+                "run_at":             r["run_at"].isoformat() if r["run_at"] else None,
+                "start_time":         r["start_time"],
+                "end_time":           r["end_time"],
+                "elapsed_seconds":    r["elapsed_seconds"],
+                "hot_topic":          r["hot_topic"],
+                "article_count":      r["article_count"],
+                "fallback_triggered": r["fallback_triggered"],
+                "filtered_count":     r["filtered_count"],
+                "sources":            r["sources"] or {},
+                "quality_report":     r["quality_report"] or {},
+                "pushed":             r["pushed"] or {},
+                "warnings":           r["warnings"] or [],
+            })
+        return jsonify({"runs": runs, "count": len(runs)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

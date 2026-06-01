@@ -47,6 +47,7 @@ from ai_daily.storage import (
     save_archive,
     read_highlights,
     save_run_status,
+    push_run_status_to_cloud,
 )
 from ai_daily.renderers import (
     _sort_categories_by_weight,
@@ -220,9 +221,10 @@ def main():
     _RUN_LOG["end_time"]        = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _RUN_LOG["elapsed_seconds"] = elapsed
 
-    # ── 运行状态驾驶舱：生成 status.html + 落盘 data/run_status.json ──
+    # ── 运行状态驾驶舱：本地 HTML + 本地 JSON + 云端推送 ──
     generate_status_html(quality_report, filtered_count, _RUN_LOG)
     save_run_status(quality_report, filtered_count, _RUN_LOG)
+    push_run_status_to_cloud(quality_report, filtered_count, _RUN_LOG)
 
     print("\n" + "=" * 52)
     print("📋 运行日志摘要")

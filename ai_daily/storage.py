@@ -180,9 +180,9 @@ def read_highlights() -> list[dict]:
         return []
 
 
-def save_run_status(quality_report: dict, filtered_count: int, run_log: dict) -> None:
-    """把最近一次运行的关键状态落盘到 data/run_status.json，供 status.html 渲染和外部消费者使用。"""
-    payload = {
+def _build_run_status_payload(quality_report: dict, filtered_count: int, run_log: dict) -> dict:
+    """构建运行状态 payload，同时供 save_run_status（本地）和 push_run_status_to_cloud（云端）使用。"""
+    return {
         "start_time":         run_log.get("start_time"),
         "end_time":           run_log.get("end_time"),
         "elapsed_seconds":    run_log.get("elapsed_seconds"),
@@ -195,8 +195,36 @@ def save_run_status(quality_report: dict, filtered_count: int, run_log: dict) ->
         "pushed":             run_log.get("pushed", {}),
         "warnings":           run_log.get("warnings", []),
     }
+
+
+def save_run_status(quality_report: dict, filtered_count: int, run_log: dict) -> None:
+    """把最近一次运行的关键状态落盘到 data/run_status.json，供 status.html 渲染和外部消费者使用。"""
+    payload = _build_run_status_payload(quality_report, filtered_count, run_log)
     RUN_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
     RUN_STATUS_PATH.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(f"  ✅ 运行状态已保存: {RUN_STATUS_PATH}")
+
+
+def push_run_status_to_cloud(quality_report: dict, filtered_count: int, run_log: dict) -> None:
+    """推送运行状态到 Railway，写入 run_status 表，供扣子 Agent 等外部消费者查询。
+
+    注意：本函数自身的失败 **不** 写回 _RUN_LOG.warnings（避免把"状态推送失败"再写进状态本身），
+    只 print + 让 launchd 日志捕获。
+    """
+    payload = _build_run_status_payload(quality_report, filtered_count, run_log)
+    try:
+        with httpx.Client(timeout=15) as c:
+            r = c.post(
+                f"{CLOUD_BASE}/update_run_status",
+                json=payload,
+                headers={"Content-Type": "application/json", **_AUTH_HEADERS},
+            )
+            if r.status_code == 200:
+                d = r.json()
+                print(f"  ✅ 运行状态已推送到云端 (id={d.get('id', '?')})")
+            else:
+                print(f"  ⚠ 运行状态推送失败: HTTP {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"  ⚠ 运行状态推送到云端失败: {e}")
