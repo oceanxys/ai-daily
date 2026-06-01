@@ -20,9 +20,11 @@ TRENDING_HTML_PATH  = OUTPUT_DIR / "trending.html"
 BENCHMARK_HTML_PATH = OUTPUT_DIR / "benchmark.html"
 TOOLS_HTML_PATH     = OUTPUT_DIR / "tools.html"
 JOBS_HTML_PATH      = OUTPUT_DIR / "jobs.html"
+STATUS_HTML_PATH    = OUTPUT_DIR / "status.html"
 DATA_DIR            = Path.home() / "Projects" / "ai-daily" / "data"
 HIGHLIGHTS_PATH     = DATA_DIR / "highlights.json"
 PAPERS_PATH         = DATA_DIR / "papers_today.json"
+RUN_STATUS_PATH     = DATA_DIR / "run_status.json"
 
 # ── 云端 API 配置 ──
 CLOUD_BASE      = "https://web-production-6e883.up.railway.app"

@@ -46,6 +46,7 @@ from ai_daily.storage import (
     push_embeddings_to_cloud,
     save_archive,
     read_highlights,
+    save_run_status,
 )
 from ai_daily.renderers import (
     _sort_categories_by_weight,
@@ -58,6 +59,7 @@ from ai_daily.renderers import (
     generate_jobs_html,
     generate_index_html,
     generate_archive_html,
+    generate_status_html,
 )
 
 
@@ -202,9 +204,7 @@ def main():
         summaries,
         _RUN_LOG["warnings"],
         focus,
-        quality_report,
         persistent_topics,
-        filtered_count,
         cat_order,
         highlights,
         agent_decision,
@@ -219,6 +219,10 @@ def main():
     elapsed = round(time.time() - t0, 1)
     _RUN_LOG["end_time"]        = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _RUN_LOG["elapsed_seconds"] = elapsed
+
+    # ── 运行状态驾驶舱：生成 status.html + 落盘 data/run_status.json ──
+    generate_status_html(quality_report, filtered_count, _RUN_LOG)
+    save_run_status(quality_report, filtered_count, _RUN_LOG)
 
     print("\n" + "=" * 52)
     print("📋 运行日志摘要")

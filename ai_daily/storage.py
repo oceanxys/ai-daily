@@ -12,6 +12,8 @@ from ai_daily.common import (
     _AUTH_HEADERS,
     ARCHIVE_DIR,
     HIGHLIGHTS_PATH,
+    RUN_STATUS_PATH,
+    _RUN_LOG,
 )
 
 
@@ -42,10 +44,16 @@ def push_articles_to_cloud(summaries: list[dict]) -> None:
             )
             if r.status_code == 200:
                 d = r.json()
-                print(f"  ✅ 云端入库：新增 {d.get('inserted', 0)} 篇，跳过重复 {len(articles) - d.get('inserted', 0)} 篇")
+                inserted = d.get("inserted", 0)
+                _RUN_LOG.setdefault("pushed", {})["articles"] = inserted
+                print(f"  ✅ 云端入库：新增 {inserted} 篇，跳过重复 {len(articles) - inserted} 篇")
             else:
+                _RUN_LOG.setdefault("pushed", {})["articles"] = "failed"
+                _RUN_LOG.setdefault("warnings", []).append(f"文章推送失败 HTTP {r.status_code}")
                 print(f"  ⚠ 文章推送失败: HTTP {r.status_code}")
     except Exception as e:
+        _RUN_LOG.setdefault("pushed", {})["articles"] = "failed"
+        _RUN_LOG.setdefault("warnings", []).append(f"文章推送异常: {e}")
         print(f"  ⚠ 文章推送到云端失败: {e}")
 
 
@@ -71,10 +79,16 @@ def push_topics_to_cloud(keywords: list, summaries: list) -> None:
             )
             if r.status_code == 200:
                 d = r.json()
-                print(f"  ✅ 已推送 {d.get('topics_count', 0)} 个热词到云端")
+                cnt = d.get("topics_count", 0)
+                _RUN_LOG.setdefault("pushed", {})["topics"] = cnt
+                print(f"  ✅ 已推送 {cnt} 个热词到云端")
             else:
+                _RUN_LOG.setdefault("pushed", {})["topics"] = "failed"
+                _RUN_LOG.setdefault("warnings", []).append(f"热词推送失败 HTTP {r.status_code}")
                 print(f"  ⚠ 热词推送失败: HTTP {r.status_code}")
     except Exception as e:
+        _RUN_LOG.setdefault("pushed", {})["topics"] = "failed"
+        _RUN_LOG.setdefault("warnings", []).append(f"热词推送异常: {e}")
         print(f"  ⚠ 热词推送到云端失败: {e}")
 
 
@@ -89,10 +103,15 @@ def push_highlights_to_cloud(highlights: list) -> None:
                 headers={"Content-Type": "application/json", **_AUTH_HEADERS},
             )
             if r.status_code == 200:
+                _RUN_LOG.setdefault("pushed", {})["highlights"] = len(highlights)
                 print(f"  ✅ 已推送 {len(highlights)} 篇精选论文到云端")
             else:
+                _RUN_LOG.setdefault("pushed", {})["highlights"] = "failed"
+                _RUN_LOG.setdefault("warnings", []).append(f"精选论文推送失败 HTTP {r.status_code}")
                 print(f"  ⚠ 精选论文推送失败: HTTP {r.status_code}")
     except Exception as e:
+        _RUN_LOG.setdefault("pushed", {})["highlights"] = "failed"
+        _RUN_LOG.setdefault("warnings", []).append(f"精选论文推送异常: {e}")
         print(f"  ⚠ 精选论文推送到云端失败: {e}")
 
 
@@ -110,11 +129,17 @@ def push_embeddings_to_cloud(embeddings: list) -> None:
             )
             if r.status_code == 200:
                 d = r.json()
-                print(f"  ✅ 已推送 {d.get('upserted', len(embeddings))} 条向量到云端")
+                upserted = d.get("upserted", len(embeddings))
+                _RUN_LOG.setdefault("pushed", {})["embeddings"] = upserted
+                print(f"  ✅ 已推送 {upserted} 条向量到云端")
                 print("✅ 向量化完成")
             else:
+                _RUN_LOG.setdefault("pushed", {})["embeddings"] = "failed"
+                _RUN_LOG.setdefault("warnings", []).append(f"向量推送失败 HTTP {r.status_code}")
                 print(f"  ⚠ 向量推送失败: HTTP {r.status_code} {r.text[:200]}")
     except Exception as e:
+        _RUN_LOG.setdefault("pushed", {})["embeddings"] = "failed"
+        _RUN_LOG.setdefault("warnings", []).append(f"向量推送异常: {e}")
         print(f"  ⚠ 向量推送到云端失败: {e}")
 
 
@@ -153,3 +178,25 @@ def read_highlights() -> list[dict]:
         return data.get("highlights", [])
     except Exception:
         return []
+
+
+def save_run_status(quality_report: dict, filtered_count: int, run_log: dict) -> None:
+    """把最近一次运行的关键状态落盘到 data/run_status.json，供 status.html 渲染和外部消费者使用。"""
+    payload = {
+        "start_time":         run_log.get("start_time"),
+        "end_time":           run_log.get("end_time"),
+        "elapsed_seconds":    run_log.get("elapsed_seconds"),
+        "hot_topic":          run_log.get("hot_topic"),
+        "article_count":      run_log.get("article_count", 0),
+        "fallback_triggered": run_log.get("fallback_triggered", False),
+        "filtered_count":     filtered_count,
+        "sources":            run_log.get("sources", {}),
+        "quality_report":     quality_report or {},
+        "pushed":             run_log.get("pushed", {}),
+        "warnings":           run_log.get("warnings", []),
+    }
+    RUN_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RUN_STATUS_PATH.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"  ✅ 运行状态已保存: {RUN_STATUS_PATH}")

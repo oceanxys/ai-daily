@@ -14,6 +14,7 @@ from ai_daily.common import (
     BENCHMARK_HTML_PATH,
     TOOLS_HTML_PATH,
     JOBS_HTML_PATH,
+    STATUS_HTML_PATH,
     ARCHIVE_DIR,
     HIGHLIGHTS_PATH,
     CLOUD_BASE,
@@ -31,6 +32,7 @@ NAV_PAGES = [
     ("💼", "求职动态", "jobs.html"),
     ("📰", "今日日报", "today.html"),
     ("📚", "历史归档", "archive.html"),
+    ("🩺", "运行状态", "status.html"),
 ]
 
 # ── 共享 CSS（所有页面通用）──
@@ -583,13 +585,59 @@ def _render_agent_block(decision: Optional[dict]) -> str:
 </div>"""
 
 
+def _render_quality_report(quality_report: Optional[dict], filtered_count: int = 0) -> str:
+    """生成「📊 采集质量报告」HTML 块。原内嵌在 today.html 末尾，2026-06 抽出供 status.html 使用。"""
+    if not quality_report:
+        return ""
+    src_count   = quality_report.get("source_count", 0)
+    success_pct = quality_report.get("success_rate", 0)
+    art_total   = quality_report.get("article_count", 0)
+    fallback    = quality_report.get("fallback_triggered", False)
+    src_rows    = ""
+    for src_name, status in quality_report.get("sources", {}).items():
+        ok   = not str(status).startswith("failed")
+        icon = '<span class="src-ok">✅</span>' if ok else '<span class="src-fail">✗</span>'
+        src_rows += (
+            f'<div class="src-item">{icon} <span>{src_name}</span>'
+            f'<span style="color:var(--t3);margin-left:auto">{status}</span></div>'
+        )
+    pct_cls  = "quality-ok" if success_pct >= 67 else "quality-warn"
+    fall_cls = "quality-warn" if fallback else "quality-ok"
+    filtered_note = (
+        f'<div class="quality-item"><span class="quality-label">去重过滤</span>'
+        f'<span class="quality-value quality-warn">{filtered_count} 条</span></div>'
+        if filtered_count else ""
+    )
+    return f"""<div class="quality-report">
+  <div class="quality-title">📊 本次采集质量报告</div>
+  <div class="quality-grid">
+    <div class="quality-item">
+      <span class="quality-label">数据来源</span>
+      <span class="quality-value">{src_count} 个</span>
+    </div>
+    <div class="quality-item">
+      <span class="quality-label">抓取成功率</span>
+      <span class="quality-value {pct_cls}">{success_pct}%</span>
+    </div>
+    <div class="quality-item">
+      <span class="quality-label">文章总数</span>
+      <span class="quality-value">{art_total} 条</span>
+    </div>
+    <div class="quality-item">
+      <span class="quality-label">备用源</span>
+      <span class="quality-value {fall_cls}">{'已触发' if fallback else '未触发'}</span>
+    </div>
+    {filtered_note}
+  </div>
+  <div class="src-list">{src_rows}</div>
+</div>"""
+
+
 def generate_today_html(
     summaries:         list[dict],
     warnings:          Optional[list] = None,
     focus:             Optional[dict] = None,
-    quality_report:    Optional[dict] = None,
     persistent_topics: Optional[list] = None,
-    filtered_count:    int = 0,
     category_order:    Optional[list] = None,
     highlights:        Optional[list] = None,
     agent_decision:    Optional[dict] = None,
@@ -655,52 +703,6 @@ def generate_today_html(
   <div class="grid">{cards}</div>
 </section>"""
 
-    # ── 采集质量报告 ──
-    report_html = ""
-    if quality_report:
-        src_count   = quality_report.get("source_count", 0)
-        success_pct = quality_report.get("success_rate", 0)
-        art_total   = quality_report.get("article_count", 0)
-        fallback    = quality_report.get("fallback_triggered", False)
-        src_rows    = ""
-        for src_name, status in quality_report.get("sources", {}).items():
-            ok   = not str(status).startswith("failed")
-            icon = '<span class="src-ok">✅</span>' if ok else '<span class="src-fail">✗</span>'
-            src_rows += (
-                f'<div class="src-item">{icon} <span>{src_name}</span>'
-                f'<span style="color:var(--t3);margin-left:auto">{status}</span></div>'
-            )
-        pct_cls  = "quality-ok" if success_pct >= 67 else "quality-warn"
-        fall_cls = "quality-warn" if fallback else "quality-ok"
-        filtered_note = (
-            f'<div class="quality-item"><span class="quality-label">去重过滤</span>'
-            f'<span class="quality-value quality-warn">{filtered_count} 条</span></div>'
-            if filtered_count else ""
-        )
-        report_html = f"""<div class="quality-report">
-  <div class="quality-title">📊 本次采集质量报告</div>
-  <div class="quality-grid">
-    <div class="quality-item">
-      <span class="quality-label">数据来源</span>
-      <span class="quality-value">{src_count} 个</span>
-    </div>
-    <div class="quality-item">
-      <span class="quality-label">抓取成功率</span>
-      <span class="quality-value {pct_cls}">{success_pct}%</span>
-    </div>
-    <div class="quality-item">
-      <span class="quality-label">文章总数</span>
-      <span class="quality-value">{art_total} 条</span>
-    </div>
-    <div class="quality-item">
-      <span class="quality-label">备用源</span>
-      <span class="quality-value {fall_cls}">{'已触发' if fallback else '未触发'}</span>
-    </div>
-    {filtered_note}
-  </div>
-  <div class="src-list">{src_rows}</div>
-</div>"""
-
     stats_bar = f"""<div class="stats">
   <div class="pulse"></div>
   <span>今日收录 <strong>{count}</strong> 条 AI 资讯</span>
@@ -712,7 +714,8 @@ def generate_today_html(
 
     highlights_html = _render_highlights_block(highlights or [])
     agent_html      = _render_agent_block(agent_decision)
-    body = warn_html + agent_html + stats_bar + "\n" + tracking_html + focus_html + highlights_html + sections + report_html
+    # 注：采集质量报告已迁移至独立的 status.html 驾驶舱页面，today.html 专注内容展示
+    body = warn_html + agent_html + stats_bar + "\n" + tracking_html + focus_html + highlights_html + sections
     extra_css = NEWS_CSS + _mem_panel_css() + _agent_css()
     html = _page_shell(f"AI 日报 · {date_str}", "today.html", body, extra_css)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1400,3 +1403,111 @@ def generate_archive_html() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     ARCHIVE_HTML_PATH.write_text(html, encoding="utf-8")
     print(f"  ✅ archive.html 生成完毕")
+
+
+# ══════════════════════════════════════════════
+#  运行状态驾驶舱 (status.html)
+# ══════════════════════════════════════════════
+
+def generate_status_html(
+    quality_report: Optional[dict],
+    filtered_count: int,
+    run_log: dict,
+) -> None:
+    """生成运行状态驾驶舱页面：最近一次运行的元数据 + 采集质量 + 推送统计 + 警告列表。"""
+    pushed   = run_log.get("pushed", {}) or {}
+    warnings = run_log.get("warnings", []) or []
+
+    start_time = run_log.get("start_time") or "—"
+    end_time   = run_log.get("end_time") or "—"
+    elapsed    = run_log.get("elapsed_seconds")
+    elapsed_str = f"{elapsed} 秒" if elapsed is not None else "—"
+    hot_topic  = run_log.get("hot_topic") or "—"
+
+    # 顶部运行元数据卡
+    info_html = f"""<div class="quality-report">
+  <div class="quality-title">🩺 最近一次运行</div>
+  <div class="quality-grid">
+    <div class="quality-item">
+      <span class="quality-label">开始时间</span>
+      <span class="quality-value">{start_time}</span>
+    </div>
+    <div class="quality-item">
+      <span class="quality-label">结束时间</span>
+      <span class="quality-value">{end_time}</span>
+    </div>
+    <div class="quality-item">
+      <span class="quality-label">总耗时</span>
+      <span class="quality-value">{elapsed_str}</span>
+    </div>
+    <div class="quality-item">
+      <span class="quality-label">热点话题</span>
+      <span class="quality-value">{hot_topic}</span>
+    </div>
+  </div>
+</div>"""
+
+    # 采集质量（复用共享函数）
+    quality_html = _render_quality_report(quality_report, filtered_count)
+
+    # 云端推送统计卡
+    def _fmt_push(v):
+        if isinstance(v, int):
+            return f'<span class="quality-value quality-ok">{v}</span>'
+        if v == "failed":
+            return '<span class="quality-value quality-warn">失败</span>'
+        return f'<span class="quality-value">{v if v else "—"}</span>'
+
+    push_items = [
+        ("文章入库", "articles"),
+        ("热词推送", "topics"),
+        ("精选论文", "highlights"),
+        ("向量推送", "embeddings"),
+    ]
+    push_grid = ""
+    for label, key in push_items:
+        val_html = _fmt_push(pushed.get(key))
+        push_grid += (
+            f'<div class="quality-item">'
+            f'<span class="quality-label">{label}</span>'
+            f'{val_html}'
+            f'</div>'
+        )
+    push_html = f"""<div class="quality-report">
+  <div class="quality-title">☁️ 云端推送状态</div>
+  <div class="quality-grid">{push_grid}</div>
+</div>"""
+
+    # 警告列表
+    err_html = ""
+    if warnings:
+        items = "".join(
+            f'<div class="src-item"><span class="src-fail">⚠</span> <span>{w}</span></div>'
+            for w in warnings
+        )
+        err_html = f"""<div class="quality-report">
+  <div class="quality-title">⚠️ 警告列表 ({len(warnings)})</div>
+  <div class="src-list">{items}</div>
+</div>"""
+    else:
+        err_html = """<div class="quality-report">
+  <div class="quality-title">⚠️ 警告列表</div>
+  <div class="src-list"><div class="src-item"><span class="src-ok">✅</span> <span>本次运行无警告</span></div></div>
+</div>"""
+
+    # 下次自动运行提示
+    schedule_html = """<div class="quality-report">
+  <div class="quality-title">⏰ 自动运行计划</div>
+  <div class="src-list">
+    <div class="src-item"><span>📅</span> <span>每天 22:00（macOS launchd）</span></div>
+    <div class="src-item"><span>📂</span> <span>日志：~/Projects/ai-daily/logs/run.log</span></div>
+    <div class="src-item"><span>💾</span> <span>本次状态 JSON：~/Projects/ai-daily/data/run_status.json</span></div>
+  </div>
+</div>"""
+
+    body = info_html + quality_html + push_html + err_html + schedule_html
+    extra_css = NEWS_CSS + _mem_panel_css()
+    html = _page_shell("运行状态 · 驾驶舱", "status.html", body, extra_css)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    STATUS_HTML_PATH.write_text(html, encoding="utf-8")
+    print(f"  ✅ status.html 生成完毕")
